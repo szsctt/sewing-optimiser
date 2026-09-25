@@ -12,7 +12,7 @@ Lay out one size on fabric 900 mm wide:
 
     pixi run layout "examples/Cuff leggings/bt12-BW-projector-pattern.pdf" --size 2-3t --width 900 --out output/cuff-2-3t
 
-This writes `output/cuff-2-3t.svg` and `.pdf` at 1:1 scale, with a 10 cm check square. Options: `--gap` (mm between pieces, default 3), `--one-way` (no 180° turns, for napped or one-way fabric).
+This writes `output/cuff-2-3t.svg` and `.pdf` at 1:1 scale, with a 10 cm check square. Options: `--gap` (mm between pieces, default 3), `--one-way` (no 180° turns, for napped or one-way fabric), `--skip TEXT` (leave out pieces whose name contains TEXT, e.g. `--skip "short sleeve"` for the long-sleeve view; repeatable).
 
 ## Current limits
 

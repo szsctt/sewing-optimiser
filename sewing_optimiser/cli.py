@@ -15,6 +15,8 @@ def main():
     ap.add_argument("--width", type=float, help="fabric width in mm, selvedge to selvedge")
     ap.add_argument("--gap", type=float, default=3.0, help="minimum gap between pieces, mm")
     ap.add_argument("--one-way", action="store_true", help="napped or one-way fabric: no 180° turns")
+    ap.add_argument("--skip", action="append", default=[], metavar="TEXT",
+                    help="leave out pieces whose name contains TEXT (e.g. 'short sleeve'); repeatable")
     ap.add_argument("--out", default="layout", help="output path without extension")
     args = ap.parse_args()
 
@@ -25,6 +27,10 @@ def main():
         ap.error("--width is required with --size")
 
     pieces = extract_pieces(args.pdf, args.size)
+    skipped = [p for p in pieces if any(t.lower() in p.name.lower() for t in args.skip)]
+    pieces = [p for p in pieces if p not in skipped]
+    for p in skipped:
+        print(f"{p.name}: skipped")
     for p in pieces:
         grain = "not found, assumed vertical" if p.grain_deg is None else f"{p.grain_deg:.0f}°"
         fold = ", unfolded from half on fold" if p.unfolded else ""
