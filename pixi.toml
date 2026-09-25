@@ -1,0 +1,16 @@
+[workspace]
+authors = ["Suzanne Scott <23192453+szsctt@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "sewing-optimiser"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+layout = "python -m sewing_optimiser.cli"
+test = "python -m pytest"
+
+[dependencies]
+python = "3.12.*"
+pymupdf = ">=1.28.0,<2"
+shapely = ">=2.1.2,<3"
+pytest = ">=9.1.1,<10"

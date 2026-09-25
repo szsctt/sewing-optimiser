@@ -1,0 +1,9 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# purchased patterns and generated layouts stay local
+examples/
+output/
+.DS_Store
+__pycache__/
