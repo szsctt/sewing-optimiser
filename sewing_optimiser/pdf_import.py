@@ -20,10 +20,22 @@ ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
 @dataclass
 class Piece:
     name: str
-    outline: Polygon  # page coordinates in mm, y pointing down
+    outline: Polygon  # whole piece, page coordinates in mm, y pointing down
     grain_deg: float | None  # direction of the grainline; None if not found
     copies: int
-    unfolded: bool  # drawn as a half on the fold and mirrored to a full piece
+    half: Polygon | None = None  # the half drawn on the fold, if the piece is cut on fold
+    fold_edge: tuple | None = None  # ((x, y), (x, y)) ends of the fold edge of `half`
+    # choices confirmed in the review step
+    include: bool = True
+    fabric: str = "main"
+    cross_grain: bool = False  # may also be turned 90°
+    mirror: bool = True  # every second copy is mirrored (left/right pairs)
+    cut_on_fold: bool = True  # for pieces with a half: cut on a folded strip, else unfolded
+    match_y: float | None = None  # stripe match line, mm below the top of the grain-aligned piece
+
+    @property
+    def unfolded(self):
+        return self.half is not None
 
 
 def list_layers(path):
@@ -117,7 +129,7 @@ def _unfold(outline, fold_texts, grain_deg):
         return None
     _, a, b = best
     full = unary_union([outline, _reflect(outline, a, b)]).buffer(0.01).buffer(-0.01)
-    return full if full.geom_type == "Polygon" else None
+    return (full, (a, b)) if full.geom_type == "Polygon" else None
 
 
 def extract_pieces(path, size_layer):
@@ -150,6 +162,11 @@ def extract_pieces(path, size_layer):
         joined = " ".join(texts)
         cut = re.search(r"cut\s*(\d+)", joined, re.I)
         name = " ".join(t for t in texts if not re.search(r"^cut\b|grain|fold", t, re.I)) or "piece"
-        full = _unfold(outline, fold_texts, g) if ON_FOLD.search(joined) else None
-        pieces.append(Piece(name, full or outline, g, int(cut.group(1)) if cut else 1, full is not None))
+        copies = int(cut.group(1)) if cut else 1
+        unfolded = _unfold(outline, fold_texts, g) if ON_FOLD.search(joined) else None
+        if unfolded:
+            full, edge = unfolded
+            pieces.append(Piece(name, full, g, copies, half=outline, fold_edge=edge))
+        else:
+            pieces.append(Piece(name, outline, g, copies))
     return pieces

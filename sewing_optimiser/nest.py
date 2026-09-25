@@ -1,29 +1,54 @@
-"""Greedy bottom-left nesting of pieces on a rectangle of fixed width.
+"""Nest pattern pieces on fabric using a raster (grid) search.
 
 Fabric coordinates: x runs across the width (selvedge to selvedge), y runs
-along the length. The grainline of every piece is turned parallel to y.
+along the length, both in mm. The grainline of every piece is turned
+parallel to y. Each piece is placed at the lowest free position, found for
+every position at once by correlating the piece's grid mask with the grid of
+occupied cells. Several piece orders are tried and the shortest layout kept.
+
+Grid masks are built from shapes grown by half the gap plus a cell diagonal,
+so two masks that do not overlap mean the real pieces are at least `gap`
+apart and inside the fabric; `check` confirms this on the exact shapes.
 """
 
-from dataclasses import dataclass
+import random
+from dataclasses import dataclass, field
 
-from shapely import affinity, prepared
-from shapely.ops import unary_union
+import numpy as np
+from PIL import Image, ImageDraw
+from scipy.signal import fftconvolve
+from shapely import affinity
+from shapely.geometry import box
 
-from .pdf_import import Piece
+RES = 2.0  # mm per grid cell
+SLACK = RES * 0.71 + RES / 2  # half a cell diagonal plus rounding when drawing polygons
+
+
+@dataclass
+class Instance:
+    """One piece to cut, already turned so its grainline runs along y."""
+
+    label: str
+    shape: object  # shapely Polygon, any position
+    rotations: tuple  # allowed extra turns, from 0, 90, 180, 270
+    match_y: float | None = None  # stripe match line, mm below the top of `shape`
+    fold: bool = False  # half piece whose fold edge (the left side) sits on the fabric fold
+    double: bool = False  # cut through two layers of folded fabric
+    min_x: float | None = None  # leftmost allowed x (keeps double-layer pieces off the mirror side)
+    data: dict = field(default_factory=dict)  # passed through to the placement
 
 
 @dataclass
 class Placement:
-    piece: Piece
-    copy: int  # 1-based
-    mirrored: bool
-    rotation: int  # 0 or 180, after aligning the grainline
+    instance: Instance
+    rotation: int
     outline: object  # shapely Polygon in fabric coordinates (mm)
 
 
-def _grain_aligned(piece):
-    grain = piece.grain_deg % 180 if piece.grain_deg is not None else 90.0  # a grainline has no direction
-    return affinity.rotate(piece.outline, 90.0 - grain, origin="centroid")
+@dataclass
+class Stripes:
+    repeat: float  # mm between identical stripes along the length
+    phase: float = 0.0  # y of a reference stripe, mm
 
 
 def _to_origin(poly):
@@ -31,41 +56,133 @@ def _to_origin(poly):
     return affinity.translate(poly, -minx, -miny)
 
 
-def nest(pieces, width, gap=3.0, step=5.0, allow_180=True):
-    instances = []
-    for piece in pieces:
-        base = _grain_aligned(piece)
-        for copy in range(1, piece.copies + 1):
-            mirrored = copy % 2 == 0  # left/right pairs on single-layer fabric
-            shape = affinity.scale(base, -1, 1, origin="centroid") if mirrored else base
-            instances.append((piece, copy, mirrored, shape))
-    instances.sort(key=lambda inst: -inst[3].area)
+def _raster(geom, rows, cols, dx=0.0, dy=0.0):
+    """Cells whose centres fall inside geom (shifted by dx, dy mm)."""
+    img = Image.new("1", (cols, rows), 0)
+    draw = ImageDraw.Draw(img)
+    for poly in getattr(geom, "geoms", [geom]):
+        pts = [((x + dx) / RES - 0.5, (y + dy) / RES - 0.5) for x, y in poly.exterior.coords]
+        draw.polygon(pts, fill=1)
+        for hole in poly.interiors:
+            draw.polygon([((x + dx) / RES - 0.5, (y + dy) / RES - 0.5) for x, y in hole.coords], fill=0)
+    return np.array(img, dtype=bool)
 
-    placements, obstacles = [], []
-    used_length = used_width = 0.0
-    for piece, copy, mirrored, shape in instances:
-        blocked = prepared.prep(unary_union(obstacles)) if obstacles else None
+
+def _variants(inst, gap, stripes):
+    """(rotation, shape at origin, grid mask, margin, match_y) for each allowed turn."""
+    out = []
+    for rot in inst.rotations:
+        if inst.fold and rot in (90, 270):
+            continue  # the fold edge must stay along the length
+        if inst.fold and rot == 180:
+            shape = _to_origin(affinity.scale(inst.shape, 1, -1))  # turned and mirrored: fold edge stays left
+        else:
+            shape = _to_origin(affinity.rotate(inst.shape, rot, origin="centroid"))
+        _, _, w, h = shape.bounds
+        match_y = None
+        if inst.match_y is not None:
+            if rot in (90, 270):
+                continue  # a turned piece cannot match stripes along the length
+            match_y = inst.match_y if rot == 0 else h - inst.match_y
+        snapped = match_y is not None or inst.fold  # final position moves off the grid by up to a cell
+        margin = gap / 2 + SLACK + (RES if snapped else 0)
+        grown = shape.buffer(margin)
+        rows, cols = int(np.ceil((h + 2 * margin) / RES)) + 1, int(np.ceil((w + 2 * margin) / RES)) + 1
+        out.append((rot, shape, _raster(grown, rows, cols, margin, margin), margin, match_y))
+    return out
+
+
+def _place_all(instances, fabric, gap, stripes, order):
+    minx, miny, maxx, maxy = fabric.bounds
+    cols, rows = int((maxx - minx) / RES) + 1, int((maxy - miny) / RES) + 1
+    blocked = ~_raster(fabric.buffer(-SLACK), rows, cols, -minx, -miny)
+    used_len = used_w = 0.0
+    placements = []
+    for i in order:
+        inst = instances[i]
         best = None
-        for rotation in (0, 180) if allow_180 else (0,):
-            candidate = _to_origin(affinity.rotate(shape, rotation, origin="centroid"))
-            _, _, w, h = candidate.bounds
-            if w > width:
-                raise ValueError(f"{piece.name} ({w:.0f} mm) is wider than the fabric")
-            x = 0.0
-            while x + w <= width:
-                y = 0.0
-                moved = affinity.translate(candidate, x, y)
-                while blocked and blocked.intersects(moved):
-                    y += step
-                    moved = affinity.translate(candidate, x, y)
-                # Shortest fabric first, then narrowest, so offcuts stay in one piece.
-                key = (max(used_length, y + h), max(used_width, x + w), y, x)
-                if best is None or key < best[0]:
-                    best = (key, rotation, moved)
-                x += step
-        (used_length, used_width, _, _), rotation, outline = best
-        placements.append(Placement(piece, copy, mirrored, rotation, outline))
-        obstacles.append(outline.buffer(gap))
+        for rot, shape, mask, margin, match_y in inst.variants:
+            mh, mw = mask.shape
+            if mh > rows or mw > cols:
+                continue
+            # positions lower than the current length plus this piece can only be worse
+            limit = min(rows, int(used_len / RES) + 2 * mh + 2)
+            # overlap[r, c] > 0 where the mask's top-left cell at (r, c) hits a blocked cell
+            overlap = fftconvolve(blocked[:limit].astype(np.float32), mask[::-1, ::-1].astype(np.float32), mode="valid")
+            free = overlap < 0.5
+            if inst.fold:
+                keep = np.zeros_like(free)
+                c0 = int(round((0 - minx - margin) / RES))  # column putting the fold edge on x = 0
+                if 0 <= c0 < free.shape[1]:
+                    keep[:, c0] = free[:, c0]
+                free = keep
+            r, c = np.nonzero(free)
+            if not len(r):
+                continue
+            x = minx + c * RES + margin
+            y = miny + r * RES + margin
+            if inst.fold:
+                x = np.zeros_like(x)
+            if inst.min_x is not None:
+                ok = x >= inst.min_x
+                r, c, x, y = r[ok], c[ok], x[ok], y[ok]
+            _, _, w, h = shape.bounds
+            if match_y is not None:
+                # move each candidate to the nearest y that puts the match line on a stripe
+                target = stripes.phase - match_y + np.round((y + match_y - stripes.phase) / stripes.repeat) * stripes.repeat
+                ok = np.abs(target - y) <= RES / 2
+                r, c, x, y = r[ok], c[ok], x[ok], target[ok]
+                if not len(r):
+                    continue
+            k1 = np.maximum(used_len, y + h - miny)
+            k2 = np.maximum(used_w, x + w - minx)
+            idx = np.lexsort((x, y, k2, k1))[0]
+            key = (k1[idx], k2[idx], y[idx], x[idx])
+            if best is None or key < best[0]:
+                best = (key, rot, shape, mask, r[idx], c[idx], x[idx], y[idx])
+        if best is None:
+            return None
+        (used_len, used_w, _, _), rot, shape, mask, r, c, x, y = best
+        placements.append(Placement(inst, rot, affinity.translate(shape, x, y)))
+        mh, mw = mask.shape
+        blocked[r:r + mh, c:c + mw] |= mask
+    return placements, used_len, used_w
 
-    used = sum(p.outline.area for p in placements)
-    return placements, used_length, used_width, used / (width * used_length)
+
+def nest(instances, fabric, gap=3.0, stripes=None, tries=8, seed=0):
+    """Place every instance on the fabric polygon; returns (placements, length, width used)."""
+    for inst in instances:
+        inst.variants = _variants(inst, gap, stripes)
+    by_area = sorted(range(len(instances)), key=lambda i: -instances[i].shape.area)
+    rng = random.Random(seed)
+    best = None
+    for t in range(tries):
+        order = by_area[:]
+        if t:  # later tries swap a few neighbours in the largest-first order
+            for _ in range(max(1, len(order) // 3)):
+                j = rng.randrange(len(order) - 1) if len(order) > 1 else 0
+                order[j:j + 2] = order[j:j + 2][::-1]
+        result = _place_all(instances, fabric, gap, stripes, order)
+        if result and (best is None or result[1:] < best[1:]):
+            best = result
+    if best is None:
+        raise ValueError("the pieces do not fit on this fabric")
+    check(best[0], fabric, gap)
+    return best
+
+
+def check(placements, fabric, gap):
+    """Raise if any two pieces are closer than gap or a piece leaves the fabric."""
+    for i, a in enumerate(placements):
+        if not fabric.buffer(1e-6).contains(a.outline):
+            raise AssertionError(f"{a.instance.label} leaves the fabric")
+        for b in placements[i + 1:]:
+            if a.outline.distance(b.outline) < gap - 1e-6:
+                raise AssertionError(f"{a.instance.label} and {b.instance.label} are closer than {gap} mm")
+
+
+def rectangle(width, length=None, pieces=()):
+    """Fabric rectangle; without a length, long enough for all pieces in a column."""
+    if length is None:
+        length = sum(max(p.bounds[2] - p.bounds[0], p.bounds[3] - p.bounds[1]) for p in pieces) + 100
+    return box(0, 0, width, length)

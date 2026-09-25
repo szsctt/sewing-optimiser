@@ -1,86 +1,95 @@
-"""Write a nested layout as 1:1 SVG and PDF (units: mm)."""
+"""Draw layouts as 1:1 SVG (mm units) and PDF."""
+
+from html import escape
 
 import pymupdf
-
-from .pdf_import import MM_PER_PT
+from shapely.geometry import box
 
 MARGIN = 20  # mm around the fabric
 CAL = 100  # side of the calibration square, mm
 
 
-def _label(p):
-    text = f"{p.piece.name} {p.copy}/{p.piece.copies}"
-    if p.mirrored:
-        text += " (mirrored)"
-    return text
+def _points(coords):
+    return " ".join(f"{x:.2f},{y:.2f}" for x, y in coords)
+
+
+def _polygon(poly, attrs=""):
+    d = "".join(f"M{_points(ring.coords)}Z" for ring in [poly.exterior, *poly.interiors])
+    return f'<path d="{d.replace(" ", "L")}" {attrs}/>'
 
 
 def _grainline(p):
-    """End points of a grainline arrow through the piece, parallel to the selvedge."""
+    """Arrow through the piece along the grain: vertical, or horizontal if turned 90°."""
     c = p.outline.representative_point()
-    _, miny, _, maxy = p.outline.bounds
-    half = (maxy - miny) * 0.3
-    return (c.x, c.y - half), (c.x, c.y + half)
+    minx, miny, maxx, maxy = p.outline.bounds
+    if p.rotation in (90, 270):
+        half = (maxx - minx) * 0.3
+        a, b = (c.x - half, c.y), (c.x + half, c.y)
+        heads = [(a, (4, -2), (4, 2)), (b, (-4, -2), (-4, 2))]
+    else:
+        half = (maxy - miny) * 0.3
+        a, b = (c.x, c.y - half), (c.x, c.y + half)
+        heads = [(a, (-2, 4), (2, 4)), (b, (-2, -4), (2, -4))]
+    out = [f'<line x1="{a[0]:.2f}" y1="{a[1]:.2f}" x2="{b[0]:.2f}" y2="{b[1]:.2f}"/>']
+    for (x, y), (dx1, dy1), (dx2, dy2) in heads:
+        out.append(f'<polyline points="{x + dx1:.2f},{y + dy1:.2f} {x:.2f},{y:.2f} {x + dx2:.2f},{y + dy2:.2f}"/>')
+    return out
 
 
-def _drawing(placements, width, length):
-    """Shapes shared by both outputs: (kind, data) with coordinates in mm."""
-    shapes = [("fabric", [(0, 0), (width, 0), (width, length), (0, length)])]
-    for p in placements:
-        shapes.append(("piece", list(p.outline.exterior.coords)))
-        shapes.append(("grain", _grainline(p)))
-        c = p.outline.representative_point()
-        shapes.append(("text", ((c.x + 5, c.y), _label(p))))
-    y = length + MARGIN
-    shapes.append(("piece", [(0, y), (CAL, y), (CAL, y + CAL), (0, y + CAL)]))
-    shapes.append(("text", ((5, y + CAL / 2), "10 cm check square")))
-    shapes.append(("text", ((width / 2 - 40, -8), f"fabric width {width:.0f} mm, length used {length:.0f} mm")))
-    return shapes, width + 2 * MARGIN, length + 3 * MARGIN + CAL
-
-
-def write_svg(path, placements, width, length):
-    shapes, w, h = _drawing(placements, width, length)
+def layout_svg(layout, stripes=None, inverted=False, calibration=True):
+    """SVG of one layout at 1:1 scale (1 user unit = 1 mm)."""
+    fg, bg = ("white", "black") if inverted else ("black", "white")
+    minx, _, maxx, _ = layout.fabric_shape.bounds
+    minx = min(minx, 0)
+    length = layout.length
+    w = maxx - minx + 2 * MARGIN
+    h = length + 2 * MARGIN + (CAL + MARGIN if calibration else 0)
+    x0, y0 = minx - MARGIN, -MARGIN
     out = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.1f}mm" height="{h:.1f}mm" '
-        f'viewBox="{-MARGIN} {-MARGIN} {w:.1f} {h:.1f}">',
-        '<g fill="none" stroke="black" stroke-width="0.5" font-family="sans-serif" font-size="8">',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.1f}mm" height="{h:.1f}mm" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}">',
+        f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{bg}"/>',
+        f'<g fill="none" stroke="{fg}" stroke-width="0.6" font-family="Helvetica, sans-serif" font-size="8">',
     ]
-    for kind, data in shapes:
-        if kind in ("fabric", "piece"):
-            pts = " ".join(f"{x:.2f},{y:.2f}" for x, y in data)
-            dash = ' stroke-dasharray="5 3"' if kind == "fabric" else ""
-            out.append(f'<polygon points="{pts}"{dash}/>')
-        elif kind == "grain":
-            (x0, y0), (x1, y1) = data
-            out.append(f'<line x1="{x0:.2f}" y1="{y0:.2f}" x2="{x1:.2f}" y2="{y1:.2f}"/>')
-            for yy, d in ((y0, 1), (y1, -1)):
-                out.append(f'<polyline points="{x0 - 3:.2f},{yy + 6 * d:.2f} {x0:.2f},{yy:.2f} {x0 + 3:.2f},{yy + 6 * d:.2f}"/>')
-        elif kind == "text":
-            (x, y), text = data
-            out.append(f'<text x="{x:.2f}" y="{y:.2f}" fill="black" stroke="none">{text}</text>')
+    shown = layout.fabric_shape.intersection(box(minx, 0, maxx, length))
+    for part in getattr(shown, "geoms", [shown]):
+        if part.geom_type == "Polygon":
+            out.append(_polygon(part, 'stroke-dasharray="6 3"'))
+    if stripes:
+        y = stripes.phase % stripes.repeat
+        while y < length:
+            out.append(f'<line x1="{minx:.1f}" y1="{y:.2f}" x2="{maxx:.1f}" y2="{y:.2f}" stroke-opacity="0.3" stroke-width="0.4"/>')
+            y += stripes.repeat
+    if layout.fold_width:
+        fw = layout.fold_width
+        out.append(f'<rect x="0" y="0" width="{fw:.1f}" height="{length:.1f}" fill="{fg}" fill-opacity="0.08" stroke="none"/>')
+        out.append(f'<line x1="0" y1="0" x2="0" y2="{length:.1f}" stroke-width="1.5" stroke-dasharray="12 4"/>')
+        out.append(f'<text x="3" y="{length - 4:.1f}" fill="{fg}" stroke="none">FOLD — double layer to {fw:.0f} mm</text>')
+    for p in layout.placements:
+        out.append(_polygon(p.outline, 'stroke-width="0.8"'))
+        out += _grainline(p)
+        c = p.outline.representative_point()
+        out.append(f'<text x="{c.x + 4:.1f}" y="{c.y:.1f}" fill="{fg}" stroke="none">{escape(p.instance.label)}</text>')
+    title = f"{layout.fabric}: length used {length:.0f} mm, width used {layout.width_used:.0f} mm"
+    if layout.fold_width:
+        title += f", fold {layout.fold_width:.0f} mm of the left selvedge over first"
+    out.append(f'<text x="{minx:.1f}" y="-8" fill="{fg}" stroke="none">{escape(title)}</text>')
+    if calibration:
+        y = length + MARGIN
+        out.append(f'<rect x="{minx:.1f}" y="{y:.1f}" width="{CAL}" height="{CAL}" stroke-width="0.8"/>')
+        out.append(f'<text x="{minx + 5:.1f}" y="{y + CAL / 2:.1f}" fill="{fg}" stroke="none">10 cm check square</text>')
     out += ["</g>", "</svg>"]
+    return "\n".join(out)
+
+
+def write_svg(path, layout, stripes=None):
     with open(path, "w") as f:
-        f.write("\n".join(out))
+        f.write(layout_svg(layout, stripes))
 
 
-def write_pdf(path, placements, width, length):
-    shapes, w, h = _drawing(placements, width, length)
+def write_pdf(path, layouts, stripes=None):
+    """One page per fabric, each at 1:1 scale."""
     doc = pymupdf.open()
-    page = doc.new_page(width=w / MM_PER_PT, height=h / MM_PER_PT)
-
-    def pt(x, y):
-        return pymupdf.Point((x + MARGIN) / MM_PER_PT, (y + MARGIN) / MM_PER_PT)
-
-    for kind, data in shapes:
-        if kind in ("fabric", "piece"):
-            pts = [pt(*xy) for xy in data]
-            page.draw_polyline(pts + [pts[0]], width=1.4, dashes="[14 8] 0" if kind == "fabric" else None)
-        elif kind == "grain":
-            (x0, y0), (x1, y1) = data
-            page.draw_line(pt(x0, y0), pt(x1, y1), width=1.4)
-            for yy, d in ((y0, 1), (y1, -1)):
-                page.draw_polyline([pt(x0 - 3, yy + 6 * d), pt(x0, yy), pt(x0 + 3, yy + 6 * d)], width=1.4)
-        elif kind == "text":
-            (x, y), text = data
-            page.insert_text(pt(x, y), text, fontsize=8 / MM_PER_PT)
+    for layout in layouts:
+        svg = pymupdf.open(stream=layout_svg(layout, stripes).encode(), filetype="svg")
+        doc.insert_pdf(pymupdf.open("pdf", svg.convert_to_pdf()))
     doc.save(path)
