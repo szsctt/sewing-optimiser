@@ -8,3 +8,4 @@ output/
 projects/
 .DS_Store
 __pycache__/
+.claude/
