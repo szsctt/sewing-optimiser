@@ -21,7 +21,7 @@
 <div id="handles"></div>
 <div id="panel">
   <h2>Projector</h2>
-  <p>H hides this panel. Arrow keys move the layout 100 mm (Shift: 10 mm) to project it in sections.</p>
+  <p>H hides this panel. Arrow keys move the layout 100 mm (Shift: 10 mm) to project it in sections. Click the projected area first if a box in this panel is selected.</p>
   <label>Mode <select id="mode"><option value="cal">1. Calibrate</option><option value="check">2. Check 10 cm square</option><option value="layout">3. Layout</option></select></label>
   <div id="cal-help">
     <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four green handles until the projected rectangle's corners sit on its corners. The grid lines are 100 mm apart.</p>
@@ -142,15 +142,19 @@ $('rh').onchange = () => { cal.rh = +$('rh').value; save(); render(); };
 $('measured').onchange = () => { cal.measured = +$('measured').value; save(); render(); };
 $('reset').onclick = () => { cal = defaults(); save(); render(); };
 ['mode', 'inverted', 'lw', 'offx', 'offy'].forEach(id => $(id).onchange = render);
+// after using a control, give the keys back to the page (a focused list would take the arrow keys)
+document.querySelectorAll('#panel select, #panel input[type=checkbox], #panel input[type=range]')
+  .forEach(el => el.addEventListener('change', () => el.blur()));
 addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' && ['number', 'text'].includes(e.target.type)) return;
   const step = e.shiftKey ? 10 : 100;
-  if (e.key === 'h' || e.key === 'H') $('panel').classList.toggle('hidden');
-  else if (e.key === 'ArrowDown') $('offy').value = +$('offy').value + step;
-  else if (e.key === 'ArrowUp') $('offy').value = +$('offy').value - step;
-  else if (e.key === 'ArrowRight') $('offx').value = +$('offx').value + step;
-  else if (e.key === 'ArrowLeft') $('offx').value = +$('offx').value - step;
-  else return;
+  const move = {ArrowDown: ['offy', step], ArrowUp: ['offy', -step], ArrowRight: ['offx', step], ArrowLeft: ['offx', -step]}[e.key];
+  if (e.key === 'h' || e.key === 'H') { $('panel').classList.toggle('hidden'); return; }
+  if (!move) return;
+  e.preventDefault();
+  e.target.blur?.();
+  $(move[0]).value = +$(move[0]).value + move[1];
+  $('mode').value = 'layout';  // moving only means something for the layout
   render();
 });
 render();
