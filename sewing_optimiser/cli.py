@@ -30,12 +30,12 @@ def main():
         fold = ", on fold (not yet unfolded)" if p.on_fold else ""
         print(f"{p.name}: cut {p.copies}, grainline {grain}{fold}")
 
-    placements, length, utilisation = nest(pieces, args.width, args.gap, allow_180=not args.one_way)
+    placements, length, used_width, utilisation = nest(pieces, args.width, args.gap, allow_180=not args.one_way)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     write_svg(out.with_suffix(".svg"), placements, args.width, length)
     write_pdf(out.with_suffix(".pdf"), placements, args.width, length)
-    print(f"Length used: {length:.0f} mm, utilisation {utilisation:.0%}")
+    print(f"Length used: {length:.0f} mm, width used: {used_width:.0f} mm, utilisation {utilisation:.0%}")
     print(f"Wrote {out.with_suffix('.svg')} and {out.with_suffix('.pdf')}")
 
 

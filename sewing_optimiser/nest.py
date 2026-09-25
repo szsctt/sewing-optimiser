@@ -42,6 +42,7 @@ def nest(pieces, width, gap=3.0, step=5.0, allow_180=True):
     instances.sort(key=lambda inst: -inst[3].area)
 
     placements, obstacles = [], []
+    used_length = used_width = 0.0
     for piece, copy, mirrored, shape in instances:
         blocked = prepared.prep(unary_union(obstacles)) if obstacles else None
         best = None
@@ -57,14 +58,14 @@ def nest(pieces, width, gap=3.0, step=5.0, allow_180=True):
                 while blocked and blocked.intersects(moved):
                     y += step
                     moved = affinity.translate(candidate, x, y)
-                key = (y + h, y, x)
+                # Shortest fabric first, then narrowest, so offcuts stay in one piece.
+                key = (max(used_length, y + h), max(used_width, x + w), y, x)
                 if best is None or key < best[0]:
                     best = (key, rotation, moved)
                 x += step
-        _, rotation, outline = best
+        (used_length, used_width, _, _), rotation, outline = best
         placements.append(Placement(piece, copy, mirrored, rotation, outline))
         obstacles.append(outline.buffer(gap))
 
-    length = max(p.outline.bounds[3] for p in placements)
     used = sum(p.outline.area for p in placements)
-    return placements, length, used / (width * length)
+    return placements, used_length, used_width, used / (width * used_length)

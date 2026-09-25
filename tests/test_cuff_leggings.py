@@ -14,7 +14,7 @@ def test_cuff_leggings_2_3t():
     assert {n: p.copies for n, p in pieces.items()} == {"RIGHT LEG": 1, "LEFT LEG": 1, "ANKLE CUFF": 2}
     assert all(abs(p.grain_deg) == 90 for p in pieces.values())
 
-    placements, length, _ = nest(list(pieces.values()), width=900)
+    placements, length, _, _ = nest(list(pieces.values()), width=900)
     assert len(placements) == 4
     for i, a in enumerate(placements):
         assert 0 <= a.outline.bounds[0] and a.outline.bounds[2] <= 900
