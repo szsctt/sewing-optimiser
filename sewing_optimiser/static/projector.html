@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Projector</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #ddd; font: 14px -apple-system, system-ui, sans-serif; }
+  #stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #panel { position: absolute; right: 12px; top: 12px; width: 300px; background: rgba(30,30,30,0.92); padding: 12px 14px; border-radius: 10px; }
+  #panel h2 { font-size: 14px; margin: 0 0 8px; }
+  #panel label { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; gap: 8px; }
+  #panel input[type=number] { width: 80px; }
+  #panel button { margin: 4px 4px 0 0; }
+  #panel p { color: #aaa; margin: 6px 0; font-size: 12px; }
+  .handle { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 2px solid #0f0; border-radius: 50%; cursor: move; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="handles"></div>
+<div id="panel">
+  <h2>Projector</h2>
+  <p>H hides this panel. Arrow keys move the layout 100 mm (Shift: 10 mm) to project it in sections.</p>
+  <label>Mode <select id="mode"><option value="cal">1. Calibrate</option><option value="check">2. Check 10 cm square</option><option value="layout">3. Layout</option></select></label>
+  <div id="cal-help">
+    <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four green handles until the projected rectangle's corners sit on its corners. The grid lines are 100 mm apart.</p>
+    <label>Rectangle width (mm) <input type="number" id="rw" value="600"></label>
+    <label>Rectangle height (mm) <input type="number" id="rh" value="400"></label>
+  </div>
+  <div id="check-help" class="hidden">
+    <p>Measure the projected square. If it is not 100 mm, enter what you measure and the scale is corrected.</p>
+    <label>Measured side (mm) <input type="number" id="measured" value="100" step="0.5"></label>
+  </div>
+  <label>Light lines on dark <input type="checkbox" id="inverted" checked></label>
+  <label>Line width <input type="range" id="lw" min="0.3" max="4" step="0.1" value="1"></label>
+  <label>Offset along length (mm) <input type="number" id="offy" value="0" step="100"></label>
+  <label>Offset across (mm) <input type="number" id="offx" value="0" step="100"></label>
+  <button id="reset">Reset calibration</button>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const layoutIndex = params.get('i') || 0;
+const KEY = 'projector-calibration';
+let cal = load() || defaults();
+let layoutSvg = null;
+
+function defaults() {
+  const w = innerWidth, h = innerHeight;
+  return {rw: 600, rh: 400, corners: [[w * 0.2, h * 0.2], [w * 0.8, h * 0.2], [w * 0.8, h * 0.8], [w * 0.2, h * 0.8]], measured: 100};
+}
+function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(cal)); } catch {} }
+
+// Homography from four source points to four destination points.
+function homography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const n = 8, M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+  }
+  return [...M.map((r, i) => r[n] / r[i]), 1];
+}
+
+// CSS transform placing millimetre coordinates on the screen.
+function mmToScreen() {
+  const rw = cal.rw, rh = cal.rh;
+  const H = homography([[0, 0], [rw, 0], [rw, rh], [0, rh]], cal.corners);
+  // correction scales about the rectangle's centre, applied before the homography
+  const k = 100 / (cal.measured || 100);
+  const pre = [k, 0, (1 - k) * rw / 2, 0, k, (1 - k) * rh / 2, 0, 0, 1];
+  const m = mul(H, pre);
+  return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
+}
+function mul(a, b) {
+  const r = [];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r.push(a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j]);
+  return r;
+}
+
+function grid() {
+  const {rw, rh} = cal, lines = [];
+  for (let x = -1000; x <= rw + 1000; x += 100) lines.push(`<line x1="${x}" y1="-1000" x2="${x}" y2="${rh + 1000}"/>`);
+  for (let y = -1000; y <= rh + 1000; y += 100) lines.push(`<line x1="-1000" y1="${y}" x2="${rw + 1000}" y2="${y}"/>`);
+  return `<svg width="${rw + 2000}" height="${rh + 2000}" viewBox="-1000 -1000 ${rw + 2000} ${rh + 2000}" style="position:absolute;left:-1000px;top:-1000px;overflow:visible">
+    <g stroke="#555" stroke-width="0.6">${lines.join('')}</g>
+    <rect x="0" y="0" width="${rw}" height="${rh}" fill="none" stroke="#0f0" stroke-width="1.2"/></svg>`;
+}
+
+function checkSquare() {
+  const {rw, rh} = cal;
+  return `<svg width="${rw}" height="${rh}" style="position:absolute;left:0;top:0;overflow:visible">
+    <rect x="${rw / 2 - 50}" y="${rh / 2 - 50}" width="100" height="100" fill="none" stroke="#fff" stroke-width="1"/>
+    <text x="${rw / 2}" y="${rh / 2 + 70}" fill="#fff" font-size="8" text-anchor="middle">100 mm</text></svg>`;
+}
+
+async function layout() {
+  const inv = $('inverted').checked;
+  const text = await (await fetch(`/api/layout.svg?i=${layoutIndex}&inverted=${inv}`)).text();
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml').documentElement;
+  const [x0, y0, w, h] = doc.getAttribute('viewBox').split(' ').map(Number);
+  doc.setAttribute('width', w); doc.setAttribute('height', h);
+  doc.style.position = 'absolute';
+  // place mm (0, 0) of the layout at the rectangle's origin, shifted by the section offset
+  doc.style.left = (x0 - +$('offx').value) + 'px'; doc.style.top = (y0 - +$('offy').value) + 'px';
+  doc.style.overflow = 'visible';
+  doc.querySelectorAll('[stroke-width]').forEach(el => el.setAttribute('stroke-width', el.getAttribute('stroke-width') * $('lw').value));
+  return doc.outerHTML;
+}
+
+async function render() {
+  const mode = $('mode').value;
+  $('cal-help').classList.toggle('hidden', mode !== 'cal');
+  $('check-help').classList.toggle('hidden', mode !== 'check');
+  const stage = $('stage');
+  stage.style.transform = mmToScreen();
+  stage.innerHTML = mode === 'cal' ? grid() : mode === 'check' ? checkSquare() : await layout();
+  document.body.style.background = mode === 'layout' && !$('inverted').checked ? '#fff' : '#000';
+  $('handles').innerHTML = mode === 'cal' ? cal.corners.map((c, i) => `<div class="handle" data-i="${i}" style="left:${c[0]}px;top:${c[1]}px"></div>`).join('') : '';
+  document.querySelectorAll('.handle').forEach(dragHandle);
+}
+
+function dragHandle(el) {
+  el.onpointerdown = ev => {
+    el.setPointerCapture(ev.pointerId);
+    el.onpointermove = e => { cal.corners[el.dataset.i] = [e.clientX, e.clientY]; el.style.left = e.clientX + 'px'; el.style.top = e.clientY + 'px'; $('stage').style.transform = mmToScreen(); };
+    el.onpointerup = () => { el.onpointermove = null; save(); };
+  };
+}
+
+$('rw').value = cal.rw; $('rh').value = cal.rh; $('measured').value = cal.measured || 100;
+$('rw').onchange = () => { cal.rw = +$('rw').value; save(); render(); };
+$('rh').onchange = () => { cal.rh = +$('rh').value; save(); render(); };
+$('measured').onchange = () => { cal.measured = +$('measured').value; save(); render(); };
+$('reset').onclick = () => { cal = defaults(); save(); render(); };
+['mode', 'inverted', 'lw', 'offx', 'offy'].forEach(id => $(id).onchange = render);
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const step = e.shiftKey ? 10 : 100;
+  if (e.key === 'h' || e.key === 'H') $('panel').classList.toggle('hidden');
+  else if (e.key === 'ArrowDown') $('offy').value = +$('offy').value + step;
+  else if (e.key === 'ArrowUp') $('offy').value = +$('offy').value - step;
+  else if (e.key === 'ArrowRight') $('offx').value = +$('offx').value + step;
+  else if (e.key === 'ArrowLeft') $('offx').value = +$('offx').value - step;
+  else return;
+  render();
+});
+render();
+</script>
+</body>
+</html>

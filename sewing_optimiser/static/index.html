@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pattern Layout</title>
+<style>
+  :root { --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --bg: #fff; --panel: #f5f5f7; --accent: #0a6cff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 -apple-system, system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  main { padding: 16px 20px; display: grid; gap: 20px; }
+  section { background: var(--panel); border-radius: 10px; padding: 14px 16px; }
+  section h2 { font-size: 14px; margin: 0 0 10px; }
+  label { display: inline-flex; gap: 6px; align-items: center; margin: 0 14px 8px 0; }
+  input[type=number] { width: 80px; }
+  input, select, button { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  td input[type=text] { width: 100%; min-width: 120px; }
+  .thumb { width: 90px; height: 90px; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
+  .muted { color: var(--muted); }
+  .layouts svg { width: 100%; height: auto; background: #fff; border: 1px solid var(--line); }
+  .stats { margin: 8px 0; }
+  .hidden { display: none; }
+  #pick svg, #photo canvas { max-width: 100%; border: 1px solid var(--line); background: #fff; }
+  #pick path { fill: rgba(10,108,255,0.03); stroke: none; cursor: pointer; }
+  #pick path:hover { fill: rgba(10,108,255,0.25); }
+  #pick path.sel { fill: rgba(10,108,255,0.45); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pattern layout</h1>
+  <select id="file"></select>
+  <select id="size"></select>
+  <label><input type="checkbox" id="byhand"> Pick pieces by hand</label>
+  <button id="load" class="primary">Load pieces</button>
+  <span id="status" class="muted"></span>
+</header>
+<main>
+  <section id="pick" class="hidden">
+    <h2>Pick pieces</h2>
+    <p class="muted">Click each closed region that is a pattern piece for your size. Click again to deselect.
+      Regions that touch are joined into one piece. For nested sizes, click the ring just inside your size's line.</p>
+    <div class="row"><label>Page <select id="pickpage"></select></label><button id="pickdone" class="primary">Use picked pieces</button></div>
+    <div id="pickview"></div>
+  </section>
+
+  <section id="pieces-section" class="hidden">
+    <h2>Pieces</h2>
+    <p class="muted">Untick option pieces you are not making. Click a piece picture to set its stripe match line.</p>
+    <table><thead><tr><th>Use</th><th>Piece</th><th>Name</th><th>Copies</th><th>Fabric</th><th>Grainline</th>
+      <th>Cross-grain</th><th>Mirror pairs</th><th>On fold</th><th>Match line (mm)</th></tr></thead>
+      <tbody id="pieces"></tbody></table>
+  </section>
+
+  <section id="fabric-section" class="hidden">
+    <h2>Fabric</h2>
+    <div class="row">
+      <label>Width (mm) <input type="number" id="width" value="1500"></label>
+      <label>Gap between pieces (mm) <input type="number" id="gap" value="3" step="0.5"></label>
+      <label>Add seam allowance (mm) <input type="number" id="sa" value="0" step="0.5"></label>
+      <label><input type="checkbox" id="oneway"> One-way / napped</label>
+    </div>
+    <div class="row">
+      <label>Stripe repeat (mm) <input type="number" id="stripe" placeholder="none"></label>
+      <label>Stripe offset (mm) <input type="number" id="phase" value="0"></label>
+      <label>Tries <input type="number" id="tries" value="8"></label>
+    </div>
+    <div class="row">
+      <span id="shape-status" class="muted">Rectangle of the width above.</span>
+      <button id="photo-btn">Use leftover fabric from a photo…</button>
+      <button id="rect-btn" class="hidden">Back to a rectangle</button>
+    </div>
+    <div id="photo" class="hidden">
+      <p class="muted" id="photo-help"></p>
+      <div class="row"><input type="file" id="photo-file" accept="image/*"><button id="photo-undo">Undo point</button><button id="photo-next" class="primary">Next</button></div>
+      <canvas id="photo-canvas"></canvas>
+    </div>
+    <p><button id="run" class="primary">Lay out</button> <span id="run-status" class="muted"></span></p>
+  </section>
+
+  <section id="result-section" class="hidden">
+    <h2>Layout</h2>
+    <div class="row"><a id="pdf" href="/api/layout.pdf">Download 1:1 PDF</a></div>
+    <div id="layouts" class="layouts"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let project = null, pieces = [], picked = {}, pageFaces = [];
+
+async function api(url, body) {
+  const r = await fetch(url, body ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)} : {});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+async function init() {
+  const files = await api('/api/files');
+  $('file').innerHTML = files.map(f => `<option>${f}</option>`).join('');
+  $('file').onchange = loadInfo;
+  loadInfo();
+}
+
+async function loadInfo() {
+  const info = await api('/api/info?pdf=' + encodeURIComponent($('file').value));
+  $('size').innerHTML = (info.layers.length ? info.layers : []).map(l => `<option>${l}</option>`).join('') +
+    '<option value="">(every line)</option>';
+  $('pickpage').innerHTML = info.pages.map((p, i) => `<option value="${i}">${i + 1}</option>`).join('');
+}
+
+$('load').onclick = async () => {
+  const pdf = $('file').value, size = $('size').value;
+  project = await api(`/api/project?pdf=${encodeURIComponent(pdf)}&size=${encodeURIComponent(size)}`);
+  fillFabric(project.fabric);
+  if ($('byhand').checked) { picked = project.picked || {}; showPick(); return; }
+  project.picked = null;
+  await loadPieces();
+};
+
+async function loadPieces() {
+  $('status').textContent = 'Reading pieces…';
+  pieces = await api('/api/pieces', project);
+  $('status').textContent = `${pieces.length} pieces`;
+  $('pieces-section').classList.remove('hidden');
+  $('fabric-section').classList.remove('hidden');
+  renderPieces();
+}
+
+function renderPieces() {
+  $('pieces').innerHTML = pieces.map((p, i) => {
+    const s = 80 / Math.max(p.w, p.h);
+    const match = p.match_y == null ? '' : `<line x1="0" x2="${p.w}" y1="${p.match_y}" y2="${p.match_y}" stroke="#e33" stroke-width="${1.5 / s}"/>`;
+    return `<tr>
+      <td><input type="checkbox" data-i="${i}" data-k="include" ${p.include ? 'checked' : ''}></td>
+      <td><svg class="thumb" data-i="${i}" viewBox="${-5 / s} ${-5 / s} ${90 / s} ${90 / s}">
+        <path d="${p.d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>
+        <line x1="${p.w / 2}" x2="${p.w / 2}" y1="${p.h * 0.2}" y2="${p.h * 0.8}" stroke="#999" stroke-width="${1 / s}"/>${match}</svg></td>
+      <td><input type="text" data-i="${i}" data-k="name" value="${p.name.replace(/"/g, '&quot;')}"></td>
+      <td><input type="number" min="0" data-i="${i}" data-k="copies" value="${p.copies}"></td>
+      <td><input type="text" style="min-width:70px;width:80px" data-i="${i}" data-k="fabric" value="${p.fabric}"></td>
+      <td>${p.grain_deg == null ? '<span class="muted">not found</span> ' : ''}
+        <select data-i="${i}" data-k="grain_deg">
+          <option value="auto">${p.grain_deg == null ? 'vertical' : 'as found'}</option>
+          <option value="90">page vertical</option><option value="0">page horizontal</option></select></td>
+      <td><input type="checkbox" data-i="${i}" data-k="cross_grain" ${p.cross_grain ? 'checked' : ''}></td>
+      <td><input type="checkbox" data-i="${i}" data-k="mirror" ${p.mirror ? 'checked' : ''}></td>
+      <td>${p.on_fold ? `<select data-i="${i}" data-k="cut_on_fold"><option value="1" ${p.cut_on_fold ? 'selected' : ''}>fold or unfold, whichever is shorter</option><option value="0" ${p.cut_on_fold ? '' : 'selected'}>always unfold</option></select>` : '<span class="muted">no</span>'}</td>
+      <td><input type="number" data-i="${i}" data-k="match_y" value="${p.match_y ?? ''}" placeholder="none"></td></tr>`;
+  }).join('');
+  $('pieces').querySelectorAll('[data-k]').forEach(el => el.onchange = () => {
+    const p = pieces[el.dataset.i], k = el.dataset.k;
+    if (el.type === 'checkbox') p[k] = el.checked;
+    else if (k === 'copies') p[k] = parseInt(el.value) || 0;
+    else if (k === 'match_y') p[k] = el.value === '' ? null : parseFloat(el.value);
+    else if (k === 'cut_on_fold') p[k] = el.value === '1';
+    else if (k === 'grain_deg') { p.grain_override = el.value === 'auto' ? null : parseFloat(el.value); }
+    else p[k] = el.value;
+    if (k === 'match_y') renderPieces();
+  });
+  $('pieces').querySelectorAll('svg.thumb').forEach(svg => svg.onclick = ev => {
+    const p = pieces[svg.dataset.i], pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    const q = pt.matrixTransform(svg.getScreenCTM().inverse());
+    p.match_y = Math.max(0, Math.min(p.h, Math.round(q.y)));
+    renderPieces();
+  });
+}
+
+function fillFabric(f) {
+  $('width').value = f.width; $('gap').value = f.gap; $('sa').value = f.seam_allowance;
+  $('oneway').checked = f.one_way; $('stripe').value = f.stripe_repeat ?? ''; $('phase').value = f.stripe_phase;
+  $('tries').value = f.tries; fabricShape = f.shape; showShape();
+}
+
+function collect() {
+  project.pieces = pieces.map(p => {
+    const c = {name: p.name, copies: p.copies, include: p.include, fabric: p.fabric || 'main', cross_grain: p.cross_grain,
+               mirror: p.mirror, cut_on_fold: p.cut_on_fold, match_y: p.match_y};
+    if (p.grain_override != null) c.grain_deg = p.grain_override;
+    return c;
+  });
+  project.fabric = {width: +$('width').value, gap: +$('gap').value, one_way: $('oneway').checked,
+    seam_allowance: +$('sa').value, stripe_repeat: $('stripe').value ? +$('stripe').value : null,
+    stripe_phase: +$('phase').value, tries: +$('tries').value, shape: fabricShape};
+  return project;
+}
+
+$('run').onclick = async () => {
+  $('run-status').textContent = 'Laying out…';
+  try {
+    const layouts = await api('/api/layout', collect());
+    $('result-section').classList.remove('hidden');
+    $('layouts').innerHTML = layouts.map((l, i) => `
+      <h3>${l.fabric}</h3>
+      <div class="stats">Length used <b>${l.length.toFixed(0)} mm</b>, width used ${l.width_used.toFixed(0)} mm,
+        ${(l.utilisation * 100).toFixed(0)}% of the fabric used is cut into pieces.
+        ${l.fold_width ? `Fold ${l.fold_width.toFixed(0)} mm of the left selvedge over first.` : ''}
+        <a href="/projector?i=${i}" target="_blank">Project this layout</a></div>
+      ${l.notes.map(n => `<p class="muted">${n}</p>`).join('')}
+      ${l.svg.replace(/ width="[^"]*mm" height="[^"]*mm"/, '')}`).join('');
+    $('run-status').textContent = '';
+  } catch (e) { $('run-status').textContent = e.message; }
+};
+
+/* ---------- picking pieces by hand ---------- */
+async function showPick() {
+  $('pick').classList.remove('hidden');
+  $('pickpage').onchange = drawPick;
+  await drawPick();
+}
+
+async function drawPick() {
+  const pdf = encodeURIComponent($('file').value), page = $('pickpage').value;
+  const layers = $('size').value ? encodeURIComponent($('size').value + '|' + otherLayers()) : '';
+  $('status').textContent = 'Finding regions…';
+  pageFaces = await api(`/api/faces?pdf=${pdf}&page=${page}&layers=${layers}`);
+  const info = await api('/api/info?pdf=' + pdf);
+  const {w, h} = info.pages[page];
+  const sel = new Set((picked[page] || []).map(c => JSON.stringify(c)));
+  $('pickview').innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:80vh">
+    <image href="/api/page.png?pdf=${pdf}&page=${page}&dpi=30" x="0" y="0" width="${w}" height="${h}"/>
+    ${pageFaces.map((f, i) => `<path data-i="${i}" d="${f.d}" class="${sel.has(JSON.stringify(f.coords)) ? 'sel' : ''}"/>`).join('')}</svg>`;
+  $('pickview').querySelectorAll('path').forEach(el => el.onclick = () => el.classList.toggle('sel'));
+  $('status').textContent = `${pageFaces.length} regions`;
+}
+
+function otherLayers() {  // layers that are not sizes, such as a base layer shared by every size
+  return [...$('size').options].map(o => o.value).filter(v => v && /base|common|all/i.test(v)).join('|');
+}
+
+$('pickdone').onclick = async () => {
+  const page = $('pickpage').value;
+  const chosen = [...$('pickview').querySelectorAll('path.sel')].map(el => pageFaces[el.dataset.i].coords);
+  picked[page] = chosen;
+  project.picked = picked;
+  await loadPieces();
+};
+
+/* ---------- fabric from a photo ---------- */
+let fabricShape = null, photo = null, photoStep = 0, pts = {sheet: [], edge: [], grain: []};
+const HELP = [
+  'Choose a photo taken from above, with an A4 sheet of paper lying flat on the fabric.',
+  'Click the four corners of the A4 sheet, going round: top-left, top-right, bottom-right, bottom-left (short side at the top).',
+  'Click round the edge of the fabric, then press Next.',
+  'Click two points along the selvedge or grain direction, then press Next.',
+];
+
+function showShape() {
+  $('shape-status').textContent = fabricShape ? `Leftover fabric from a photo (${fabricShape.length} points).` : 'Rectangle of the width above.';
+  $('rect-btn').classList.toggle('hidden', !fabricShape);
+}
+$('rect-btn').onclick = () => { fabricShape = null; showShape(); };
+$('photo-btn').onclick = () => { $('photo').classList.remove('hidden'); photoStep = 0; pts = {sheet: [], edge: [], grain: []}; $('photo-help').textContent = HELP[0]; };
+$('photo-file').onchange = ev => {
+  const img = new Image();
+  img.onload = () => { photo = img; photoStep = 1; $('photo-help').textContent = HELP[1]; drawPhoto(); };
+  img.src = URL.createObjectURL(ev.target.files[0]);
+};
+function stepKey() { return ['', 'sheet', 'edge', 'grain'][photoStep]; }
+$('photo-canvas').onclick = ev => {
+  if (!photo || !stepKey()) return;
+  const c = $('photo-canvas'), r = c.getBoundingClientRect();
+  const x = (ev.clientX - r.left) * c.width / r.width, y = (ev.clientY - r.top) * c.height / r.height;
+  const list = pts[stepKey()];
+  if (stepKey() === 'sheet' && list.length >= 4) return;
+  if (stepKey() === 'grain' && list.length >= 2) return;
+  list.push([x, y]); drawPhoto();
+};
+$('photo-undo').onclick = () => { if (stepKey()) pts[stepKey()].pop(); drawPhoto(); };
+$('photo-next').onclick = () => {
+  if (photoStep === 1 && pts.sheet.length === 4) photoStep = 2;
+  else if (photoStep === 2 && pts.edge.length >= 3) photoStep = 3;
+  else if (photoStep === 3 && pts.grain.length === 2) { finishPhoto(); return; }
+  $('photo-help').textContent = HELP[photoStep]; drawPhoto();
+};
+function drawPhoto() {
+  const c = $('photo-canvas'), ctx = c.getContext('2d');
+  c.width = photo.width; c.height = photo.height; ctx.drawImage(photo, 0, 0);
+  const lw = Math.max(2, photo.width / 400);
+  const draw = (list, colour, close) => {
+    ctx.strokeStyle = ctx.fillStyle = colour; ctx.lineWidth = lw; ctx.beginPath();
+    list.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    if (close && list.length > 2) ctx.closePath(); ctx.stroke();
+    list.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, lw * 3, 0, 7); ctx.fill(); });
+  };
+  draw(pts.sheet, '#e33', true); draw(pts.edge, '#0a6cff', true); draw(pts.grain, '#0a0', false);
+}
+
+// Homography mapping four image points to four points in mm (direct linear solve).
+function homography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const h = solve(A, b); return [...h, 1];
+}
+function solve(A, b) {
+  const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+  }
+  return M.map((r, i) => r[n] / r[i]);
+}
+function apply(H, [x, y]) { const w = H[6] * x + H[7] * y + H[8]; return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w]; }
+
+function finishPhoto() {
+  const H = homography(pts.sheet, [[0, 0], [210, 0], [210, 297], [0, 297]]);
+  let edge = pts.edge.map(p => apply(H, p));
+  const [g0, g1] = pts.grain.map(p => apply(H, p));
+  // turn so the grain runs along y, then move to positive coordinates
+  const a = Math.PI / 2 - Math.atan2(g1[1] - g0[1], g1[0] - g0[0]);
+  edge = edge.map(([x, y]) => [x * Math.cos(a) - y * Math.sin(a), x * Math.sin(a) + y * Math.cos(a)]);
+  const mx = Math.min(...edge.map(p => p[0])), my = Math.min(...edge.map(p => p[1]));
+  fabricShape = edge.map(([x, y]) => [Math.round((x - mx) * 10) / 10, Math.round((y - my) * 10) / 10]);
+  $('photo').classList.add('hidden'); showShape();
+}
+
+init();
+</script>
+</body>
+</html>

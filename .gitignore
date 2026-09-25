@@ -5,5 +5,6 @@
 # purchased patterns and generated layouts stay local
 examples/
 output/
+projects/
 .DS_Store
 __pycache__/

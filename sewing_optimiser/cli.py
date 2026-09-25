@@ -51,6 +51,8 @@ def main():
     settings = FabricSettings(args.width, gap=args.gap, one_way=args.one_way, seam_allowance=args.seam_allowance,
                               stripe_repeat=args.stripes, tries=args.tries)
     layouts = make_layouts(pieces, settings)
+    if not layouts:
+        ap.exit(1, "No pieces found on this layer. Try another layer, or pick pieces by hand in the app.\n")
     stripes = Stripes(args.stripes) if args.stripes else None
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -2,6 +2,7 @@
 
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 import pymupdf
@@ -33,7 +34,7 @@ class Piece:
     mirror: bool = True  # every second copy is mirrored (left/right pairs)
     cut_on_fold: bool = True  # for pieces with a half: cut on a folded strip, else unfolded
     match_y: float | None = None  # stripe match line, mm below the top of the grain-aligned piece
-    page: int = 0
+    page: int = 0  # sheet number (tiled pages joined count as one sheet)
     marks: MultiLineString = field(default_factory=MultiLineString)  # notches, same coordinates as outline
     half_marks: MultiLineString = field(default_factory=MultiLineString)  # notches of `half`
 
@@ -80,32 +81,144 @@ def _polylines(items):
     return [line for line in lines if len(line) > 1]
 
 
-def _linework(page, layers):
-    """Stroked lines on the given layers (None: every stroke) and the widest stroke, mm."""
-    lines, stroke = [], 0.0
-    for d in page.get_drawings():
-        if "s" in d["type"] and (layers is None or d.get("layer") in layers):
-            lines += [LineString(pl) for pl in _polylines(d["items"])]
-            stroke = max(stroke, (d.get("width") or 0) * MM_PER_PT)
+def _signature(d):
+    """A drawing's layer, item kinds and shape relative to its first point (for matching tiles)."""
+    pts = []
+    for item in d["items"]:
+        for p in item[1:]:
+            if isinstance(p, pymupdf.Point):
+                pts.append(p)
+            elif isinstance(p, pymupdf.Rect):
+                pts += [p.tl, p.tr, p.br, p.bl]
+            elif isinstance(p, pymupdf.Quad):
+                pts += [p.ul, p.ur, p.lr, p.ll]
+    if len(pts) < 4:
+        return None, None
+    x0, y0 = pts[0].x, pts[0].y
+    shape = tuple((round(p.x - x0), round(p.y - y0)) for p in pts)
+    return (d.get("layer"), "".join(i[0] for i in d["items"]), shape), (x0, y0)
+
+
+def sheets(doc):
+    """Groups of pages that are tiles of one sheet, with each page's offset on the sheet in mm.
+
+    Tiled patterns often repeat whole paths on every page they cross, shifted
+    by the page's position, and clipped to the page. Paths that run off the
+    page and have the same shape on two pages vote for the shift between
+    them; pages joined this way form one sheet.
+    """
+    anchors = []
+    for page in doc:
+        found = {}
+        inside = page.rect + (-1, -1, 1, 1)
+        for d in page.get_drawings():
+            if d["rect"] in inside:
+                continue  # only paths running off the page can continue on another tile
+            sig, at = _signature(d)
+            if sig is not None:
+                found.setdefault(sig, at)
+        anchors.append(found)
+    offset = {}
+    groups, todo = [], list(range(doc.page_count))
+    while todo:
+        root = todo.pop(0)
+        group, queue, offset[root] = [root], [root], (0.0, 0.0)
+        while queue:
+            a = queue.pop()
+            for b in list(todo):
+                votes = Counter()
+                for sig, (xa, ya) in anchors[a].items():
+                    if sig in anchors[b]:
+                        xb, yb = anchors[b][sig]
+                        votes[(round(xa - xb, 1), round(ya - yb, 1))] += 1
+                if votes:
+                    (dx, dy), n = votes.most_common(1)[0]
+                    if n >= 3:
+                        offset[b] = (offset[a][0] + dx, offset[a][1] + dy)
+                        todo.remove(b)
+                        group.append(b)
+                        queue.append(b)
+        groups.append(sorted(group))
+    groups = _fill_grid(groups, offset)
+    return [[(n, offset[n][0] * MM_PER_PT, offset[n][1] * MM_PER_PT) for n in g] for g in groups]
+
+
+def _fill_grid(groups, offset, tol=15):
+    """Add lone pages to a sheet whose pages sit on a regular grid (pages in reading order).
+
+    Blank or sparse tiles share no paths with their neighbours; their place
+    follows from the grid the other tiles form.
+    """
+    lone = {g[0] for g in groups if len(g) == 1}
+    for g in [g for g in groups if len(g) >= 3]:
+        p0 = g[0]
+        for cols in range(1, 13):
+            cells = {p: ((p - p0) % cols, (p - p0) // cols) for p in g}
+            sx = [offset[p][0] / c for p, (c, r) in cells.items() if c]
+            sy = [offset[p][1] / r for p, (c, r) in cells.items() if r]
+            sx = sorted(sx)[len(sx) // 2] if sx else 0.0
+            sy = sorted(sy)[len(sy) // 2] if sy else 0.0
+            if all(abs(offset[p][0] - c * sx) < tol and abs(offset[p][1] - r * sy) < tol for p, (c, r) in cells.items()):
+                last = p0 + (max(r for _, r in cells.values()) + 1) * cols
+                for p in sorted(lone):
+                    if p0 < p < last:
+                        offset[p] = (((p - p0) % cols) * sx, ((p - p0) // cols) * sy)
+                        g.append(p)
+                        lone.discard(p)
+                g.sort()
+                break
+    return [g for g in groups if len(g) > 1 or g[0] in lone]
+
+
+def _key(geom):
+    return tuple(round(v * 2) for xy in geom.coords for v in xy)  # to 0.5 mm
+
+
+def sheet_lines(doc, sheet, layers):
+    """Stroked lines of a sheet on the given layers (None: every stroke), mm, and the widest stroke."""
+    lines, stroke, seen = [], 0.0, set()
+    for number, dx, dy in sheet:
+        for d in doc[number].get_drawings():
+            if "s" in d["type"] and (layers is None or d.get("layer") in layers):
+                for pl in _polylines(d["items"]):
+                    line = affinity.translate(LineString(pl), dx, dy)
+                    if _key(line) not in seen:  # tiles repeat paths that cross them
+                        seen.add(_key(line))
+                        lines.append(line)
+                stroke = max(stroke, (d.get("width") or 0) * MM_PER_PT)
     return lines, stroke
 
 
-def faces(page, layers=None):
-    """Every closed region the strokes form, as outlines without holes (for picking pieces by hand)."""
-    lines, _ = _linework(page, layers)
+def sheet_text(doc, sheet):
+    """(text, centre, direction in degrees) of every text line on a sheet, mm."""
+    found, seen = [], set()
+    for number, dx, dy in sheet:
+        for block in doc[number].get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                text = "".join(s["text"] for s in line["spans"]).strip()
+                x0, y0, x1, y1 = (v * MM_PER_PT for v in line["bbox"])
+                centre = Point((x0 + x1) / 2 + dx, (y0 + y1) / 2 + dy)
+                key = (text, round(centre.x), round(centre.y))
+                if text and key not in seen:
+                    seen.add(key)
+                    found.append((text, centre, math.degrees(math.atan2(line["dir"][1], line["dir"][0]))))
+    return found
+
+
+def faces(lines):
+    """Every closed region the lines form, as outlines without holes (for picking pieces by hand)."""
     found = polygonize(set_precision(unary_union(lines), 0.01))
     return [Polygon(f.exterior) for f in found if f.area > MIN_PIECE_AREA]
 
 
-def _outlines(page, layers):
-    """Piece outlines on the given layers, inset to the inside of the stroke.
+def _outlines(lines, stroke):
+    """Piece outlines formed by the lines, inset to the inside of the stroke.
 
     Outlines may be drawn as several open paths, as rectangles, or as two
     mirrored halves that share an edge. All strokes are joined, split into
     closed faces, and faces that share an edge (or nearly do) are merged into
     one piece.
     """
-    lines, stroke = _linework(page, layers)
     found = polygonize(set_precision(unary_union(lines), 0.01))  # grid snap joins near-coincident ends
     merged = unary_union([f.buffer(JOIN_GAP) for f in found]).buffer(-JOIN_GAP)
     parts = getattr(merged, "geoms", [merged])
@@ -164,32 +277,26 @@ def _notches(lines, outlines):
     return [MultiLineString(m) for m in marks]
 
 
-def pieces_from_outlines(page, outlines, marks=None):
-    """Attach names, cut counts, grainlines and fold edges from the page text to outlines (mm)."""
+def pieces_from_outlines(texts, outlines, marks=None):
+    """Attach names, cut counts, grainlines and fold edges from text lines (see sheet_text) to outlines."""
     marks = marks or [MultiLineString() for _ in outlines]
     labels = [[] for _ in outlines]
     names = [[] for _ in outlines]
     grain = [None] * len(outlines)
     folds = [[] for _ in outlines]
-    for block in page.get_text("dict")["blocks"]:
-        for line in block.get("lines", []):
-            text = "".join(s["text"] for s in line["spans"]).strip()
-            if not text:
-                continue
-            x0, y0, x1, y1 = (v * MM_PER_PT for v in line["bbox"])
-            centre = Point((x0 + x1) / 2, (y0 + y1) / 2)
-            dists = [o.distance(centre) for o in outlines]
-            i = min(range(len(outlines)), key=dists.__getitem__)
-            if dists[i] > LABEL_MAX_DIST_MM:
-                continue
-            direction = math.degrees(math.atan2(line["dir"][1], line["dir"][0]))
-            if "grain" in text.lower():
-                grain[i] = direction  # the word runs along the grainline arrow
-            if "fold" in text.lower():
-                folds[i].append((centre, direction))
-            labels[i].append(text)
-            if dists[i] == 0 and not re.search(r"^cut\b|grain|fold|seam\s+allowance|pattern|notch", text, re.I):
-                names[i].append(text)
+    for text, centre, direction in texts if outlines else []:
+        dists = [o.distance(centre) for o in outlines]
+        i = min(range(len(outlines)), key=dists.__getitem__)
+        if dists[i] > LABEL_MAX_DIST_MM:
+            continue
+        if "grain" in text.lower():
+            grain[i] = direction  # the word runs along the grainline arrow
+        if "fold" in text.lower():
+            folds[i].append((centre, direction))
+        labels[i].append(text)
+        size_list = len(re.findall(r"\b(?:NB|PM|\d+-\d+[mt]?)\b", text)) >= 3
+        if dists[i] == 0 and not size_list and not re.search(r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order", text, re.I):
+            names[i].append(text)
 
     pieces = []
     for outline, notches, texts, name_parts, g, fold_texts in zip(outlines, marks, labels, names, grain, folds):
@@ -206,16 +313,15 @@ def pieces_from_outlines(page, outlines, marks=None):
     return pieces
 
 
-def extract_pieces(path, size_layer=None, pages=None):
-    """Pieces of one size. size_layer None takes every stroke (a file per size)."""
+def extract_pieces(path, size_layer=None):
+    """Pieces of one size from every sheet. size_layer None takes every stroke (a file per size)."""
     doc = pymupdf.open(path)
+    layers = None if size_layer is None else {size_layer}
     pieces = []
-    for number in pages if pages is not None else range(doc.page_count):
-        page = doc[number]
-        layers = None if size_layer is None else {size_layer}
-        outlines = _outlines(page, layers)
-        marks = _notches(_linework(page, layers)[0], outlines)
-        for piece in pieces_from_outlines(page, outlines, marks):
+    for number, sheet in enumerate(sheets(doc)):
+        lines, stroke = sheet_lines(doc, sheet, layers)
+        outlines = _outlines(lines, stroke)
+        for piece in pieces_from_outlines(sheet_text(doc, sheet), outlines, _notches(lines, outlines)):
             piece.page = number
             pieces.append(piece)
     return pieces
