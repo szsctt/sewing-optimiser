@@ -16,7 +16,7 @@ from . import project as proj
 from .layout import _align, make_layouts
 from .nest import Stripes
 from .output import layout_svg, write_pdf
-from .pdf_import import MM_PER_PT, faces, list_sizes, sheet_lines, sheets_of
+from .pdf_import import MM_PER_PT, _reflect, faces, list_sizes, sheet_lines, sheets_of
 
 ROOT = Path(__file__).parent.parent
 EXAMPLES = ROOT / "examples"
@@ -127,8 +127,12 @@ def get_pieces(project: dict):
         minx, miny, maxx, maxy = aligned.bounds
         aligned = affinity.translate(aligned, -minx, -miny)
         # parts are drawn over the picture so they can be clicked off or back on
-        parts = [_part(affinity.translate(_align(r, p.grain_deg), -minx, -miny), maxx - minx, maxy - miny)
-                 for r in p.regions]
+        place = lambda g: affinity.translate(_align(g, p.grain_deg), -minx, -miny)
+        parts = [_part(place(r), maxx - minx, maxy - miny) for r in p.regions]
+        if p.half is not None:  # a part of a piece cut on the fold is on both halves
+            for part, r in zip(parts, p.regions):
+                part["d"] += _path_d(place(_reflect(r, *p.fold_edge)))
+                part["label"] = re.sub(r" (left|right),", ",", part["label"]) + ", on both halves"
         biggest = max(range(len(parts)), key=lambda k: p.regions[k].area) if parts else None
         if parts:
             parts[biggest]["label"] = "main part"
