@@ -27,3 +27,18 @@ def test_longies_parts_are_taped_together_and_lengthened():
     height = lambda p: (lambda b: b[3] - b[1])(_align(p.outline, p.grain_deg).bounds)
     piece.lengthen, piece.lengthen_at = 100, 200
     assert height(_lengthened(piece)) == pytest.approx(height(piece) + 100, abs=0.5)
+
+
+XL = NAPPY / "Nappy cover/XLarge-XXXLpatterns.pdf"
+
+
+@pytest.mark.skipif(not XL.exists(), reason="example patterns are not in the repository")
+def test_xl_soaker_is_three_pieces():
+    from sewing_optimiser import project
+
+    size = next(v for v, label in list_sizes(XL) if label.startswith("XLarge"))
+    found = project.pieces(project.default(str(XL), size))
+    assert [(p.name.split(" (")[0], p.copies) for p in found] == [
+        ("Front of the soaker + Back of the soaker", 1), ("Waistband", 1), ("Leg Cuffs", 2)]
+    assert found[0].half is not None  # the body is cut on the fold
+    assert found[1].outline.bounds[2] == pytest.approx(19.5 * 25.4)  # 19.5" by 4" for the XL

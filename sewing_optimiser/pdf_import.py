@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import pymupdf
 from shapely import affinity, set_precision
-from shapely.geometry import LineString, MultiLineString, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
 
 MM_PER_PT = 25.4 / 72
@@ -38,6 +38,7 @@ class Piece:
     lengthen: float = 0.0  # mm added (or, if negative, removed) along the grain ...
     lengthen_at: float | None = None  # ... at this many mm below the top of the grain-aligned piece
     page: int = 0  # sheet number (tiled pages joined count as one sheet)
+    source: int | None = None  # index among the pieces read from the PDF
     marks: MultiLineString = field(default_factory=MultiLineString)  # notches, same coordinates as outline
     half_marks: MultiLineString = field(default_factory=MultiLineString)  # notches of `half`
 
@@ -97,8 +98,18 @@ def list_sizes(path):
                     names[key] = named[0].split(" ")[0].rstrip(",:")
                     if _black(d):
                         sized.add(key)  # black lines are shared by every size, unless the legend names them
-            if not _black(d) and (len(d["items"]) > 1 or d["items"][0][0] != "l"):  # straight lines (tape lines) are not sizes
+            if not _black(d) and (len(d["items"]) > 1 or d["items"][0][0] not in "lre"):  # lines, boxes are not sizes
                 sized.add(key)
+    for page in doc:  # legends written in the line colour
+        for block in page.get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                for span in line["spans"][:1]:
+                    colour = f"#{span['color']:06x}"
+                    words = span["text"].split()
+                    for key in sized:
+                        legend = words and words[0][0].isupper() and any(c.isdigit() for c in span["text"])
+                        if key.split(" ")[0] == colour and legend and key not in names:
+                            names[key] = words[0].rstrip(",:")
     sizes = [("style:" + k, f"{names.get(k) or 'lines'} ({k})") for k in sized]
     return sizes if len(sizes) > 1 else []
 
@@ -341,7 +352,7 @@ def _regions(lines, gap=GAP_CLOSE):
                 bridges.append(LineString([end, (end.x + dx * k, end.y + dy * k)]))
     # grid snap joins near-coincident ends; bridges can also split a region oddly, so keep both results
     plain = list(polygonize(set_precision(unary_union(lines), 0.01)))
-    bridged = list(polygonize(set_precision(unary_union(lines + bridges), 0.01))) if bridges else []
+    bridged = list(polygonize(unary_union([set_precision(g, 0.01) for g in lines + bridges]))) if bridges else []
     return plain + bridged
 
 
@@ -444,14 +455,16 @@ def pieces_from_outlines(texts, outlines, marks=None):
             folds[i].append((centre, direction))
         labels[i].append(text)
         size_list = len(re.findall(r"\b(?:NB|PM|\d+-\d+[mt]?)\b", text)) >= 3
-        if dists[i] == 0 and not size_list and not re.search(r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order", text, re.I):
+        if dists[i] == 0 and not size_list and not re.search(r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order|square", text, re.I):
             names[i].append(text)
 
     pieces = []
     for outline, notches, texts, name_parts, g, fold_texts in zip(outlines, marks, labels, names, grain, folds):
         joined = " ".join(texts)
         cut = re.search(r"cut\s*(\d+)", joined, re.I)
-        name = " ".join(name_parts)[:40].strip() or "piece"
+        near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
+        name = " ".join(name_parts or near[:1])
+        name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0][:40].strip() or "piece"  # drop instructions
         copies = int(cut.group(1)) if cut else 1
         unfolded = _unfold(outline, notches, fold_texts, g) if ON_FOLD.search(joined) else None
         if unfolded:
@@ -469,7 +482,101 @@ def extract_pieces(path, size_layer=None):
     for number, sheet in enumerate(sheets(doc)):
         lines, stroke = sheet_lines(doc, sheet, size_layer)
         outlines = _outlines(lines, stroke)
+        boxes = _shaded_boxes(doc, sheet)
+        dashed = _dashed_lines(doc, sheet)
         for piece in pieces_from_outlines(sheet_text(doc, sheet), outlines, _notches(lines, outlines)):
+            if _check_square(piece) or any(b.contains(piece.outline) for b in boxes):
+                continue
+            if piece.half is None:
+                piece = _fold_on_dashed_edge(piece, dashed)
             piece.page = number
             pieces.append(piece)
     return pieces
+
+
+def _dashed_lines(doc, sheet):
+    """Straight black dashed lines, mm: home-made patterns mark the fold this way."""
+    found = []
+    for number, dx, dy in sheet:
+        for d in doc[number].get_drawings():
+            dashes = (d.get("dashes") or "[]").strip("[] 0").split()
+            if "s" in d["type"] and _black(d) and dashes and len(d["items"]) == 1 and d["items"][0][0] == "l":
+                a, b = d["items"][0][1:]
+                found.append(LineString([(a.x * MM_PER_PT + dx, a.y * MM_PER_PT + dy),
+                                         (b.x * MM_PER_PT + dx, b.y * MM_PER_PT + dy)]))
+    return found
+
+
+def _fold_on_dashed_edge(piece, dashed):
+    """Unfold a piece whose long straight edge along the grain is drawn dashed (a fold line)."""
+    grain = piece.grain_deg if piece.grain_deg is not None else 90.0
+    coords = list(piece.outline.simplify(0.3).exterior.coords)
+    for a, b in sorted(zip(coords, coords[1:]), key=lambda e: -math.dist(*e)):
+        edge = LineString([a, b])
+        angle = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+        if edge.length < 50 or abs((angle - grain + 90) % 180 - 90) > 3:
+            continue
+        covered = sum(edge.intersection(l.buffer(2)).length for l in dashed)
+        if covered > 0.8 * edge.length:
+            full = unary_union([piece.outline, _reflect(piece.outline, a, b)]).buffer(0.01).buffer(-0.01)
+            if full.geom_type == "Polygon":
+                marks = piece.marks
+                both = MultiLineString(list(marks.geoms) + list(_reflect(marks, a, b).geoms)) if not marks.is_empty else marks
+                return Piece(piece.name, full, piece.grain_deg, piece.copies, half=piece.outline, fold_edge=(a, b),
+                             marks=both, half_marks=marks)
+    return piece
+
+
+def _check_square(piece):
+    """A printing check square (1 inch, 4 cm, 5 cm) rather than a piece."""
+    minx, miny, maxx, maxy = piece.outline.bounds
+    w, h = maxx - minx, maxy - miny
+    return abs(w - h) < 2 and 20 < w < 55 and piece.outline.area > 0.95 * w * h
+
+
+def _shaded_boxes(doc, sheet):
+    """Filled coloured rectangles, mm: illustrations such as a sample cutting layout."""
+    boxes = []
+    for number, dx, dy in sheet:
+        for d in doc[number].get_drawings():
+            fill = d.get("fill")
+            coloured = fill and max(fill[:3]) - min(fill[:3]) > 0.3  # not white, grey or black
+            if coloured and len(d["items"]) == 1 and d["items"][0][0] == "re":
+                r = d["rect"]
+                boxes.append(box(r.x0 * MM_PER_PT + dx, r.y0 * MM_PER_PT + dy, r.x1 * MM_PER_PT + dx, r.y1 * MM_PER_PT + dy).buffer(1))
+    return boxes
+
+
+INCH = 25.4
+SIZE_WORDS = [("xxxlarge", "xxxl"), ("xxlarge", "xxl"), ("xlarge", "xl"), ("large", "l"), ("medium", "m"),
+              ("small", "s"), ("newborn", "nb")]
+
+
+def size_key(name):
+    """A size name reduced for comparison: 'XLarge' and 'XL' both give 'xl'."""
+    name = name.lower().strip()
+    return dict(SIZE_WORDS).get(name, name)
+
+
+def text_rectangles(path):
+    """Pieces the instructions give only by size, e.g. 'Waistband ... 12” by 4” for the newborn soaker'.
+
+    Returns {"name", "copies", "sizes": {size key: (a, b) in mm}} for each.
+    """
+    found = []
+    for page in pymupdf.open(path):
+        for block in page.get_text("blocks"):
+            # a block may hold several, each headed 'Name:'
+            for text in re.split(r"(?<=[.”\"])\s(?=[A-Z][a-z]+(?: [A-Z][a-z]+)?:)", " ".join(block[4].split())):
+                sizes = re.findall(r"([\d.]+)[”\"]\s*(?:by|x)\s*([\d.]+)[”\"]\s*for the (\w+)", text)
+                if sizes:
+                    name = re.split(r"[:(]| Place | Cut ", text)[0].strip()
+                    copies = re.search(r"\(Cut (\d+)", text, re.I)
+                    found.append({"name": name, "copies": int(copies.group(1)) if copies else 1,
+                                  "sizes": {size_key(k): (float(a) * INCH, float(b) * INCH) for a, b, k in sizes}})
+    for rect in found:  # a count given elsewhere, e.g. a label 'Leg Cuffs (Cut 2)'
+        for page in pymupdf.open(path):
+            m = re.search(re.escape(rect["name"]) + r"\s*\(Cut (\d+)", page.get_text(), re.I)
+            if m:
+                rect["copies"] = int(m.group(1))
+    return found

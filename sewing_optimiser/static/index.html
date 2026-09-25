@@ -58,7 +58,7 @@
     <div class="row"><label>Clicking a picture sets the
       <select id="clickmode"><option value="match_y">stripe match line (red)</option><option value="lengthen_at">lengthen/shorten line (blue)</option></select></label></div>
     <table><thead><tr><th>Use</th><th>Piece</th><th>Name</th><th>Copies</th><th>Fabric</th><th>Grainline</th>
-      <th>Cross-grain</th><th>Mirror pairs</th><th>On fold</th><th>Match line (mm)</th><th>Lengthen by (mm)</th><th>at (mm)</th></tr></thead>
+      <th>Cross-grain</th><th>Mirror pairs</th><th>On fold</th><th>Join with</th><th>Match line (mm)</th><th>Lengthen by (mm)</th><th>at (mm)</th></tr></thead>
       <tbody id="pieces"></tbody></table>
     <div class="row" style="margin-top:10px">Add a piece given only by its size:
       <label>Name <input type="text" id="r-name" value="Waistband" style="width:120px"></label>
@@ -136,7 +136,7 @@ $('load').onclick = async () => {
 
 async function loadPieces() {
   $('status').textContent = 'Reading pieces…';
-  pieces = await api('/api/pieces', project);
+  ({pieces, joins: project.joins} = await api('/api/pieces', project));
   $('status').textContent = `${pieces.length} pieces`;
   showRects();
   $('pieces-section').classList.remove('hidden');
@@ -163,7 +163,8 @@ function renderPieces() {
           <option value="90">page vertical</option><option value="0">page horizontal</option></select></td>
       <td><input type="checkbox" data-i="${i}" data-k="cross_grain" ${p.cross_grain ? 'checked' : ''}></td>
       <td><input type="checkbox" data-i="${i}" data-k="mirror" ${p.mirror ? 'checked' : ''}></td>
-      <td>${p.on_fold ? `<select data-i="${i}" data-k="cut_on_fold"><option value="1" ${p.cut_on_fold ? 'selected' : ''}>fold or unfold, whichever is shorter</option><option value="0" ${p.cut_on_fold ? '' : 'selected'}>always unfold</option></select>` : '<span class="muted">no</span>'}</td>
+      <td>${p.on_fold ? `<select data-i="${i}" data-k="cut_on_fold"><option value="1" ${p.cut_on_fold ? 'selected' : ''}>fold or unfold, whichever is shorter</option><option value="0" ${p.cut_on_fold ? '' : 'selected'}>always unfold</option></select>` : `<button data-fold="${i}" title="Treat the longest straight edge along the grain as the fold">Mark on fold</button>`}</td>
+      <td>${p.source == null ? '' : `<select data-join="${p.source}"><option value="">—</option>${pieces.filter(q => q.source != null && q !== p).map(q => `<option value="${q.source}">put ${q.name.slice(0, 25)} below</option>`).join('')}</select>`}</td>
       <td><input type="number" data-i="${i}" data-k="match_y" value="${p.match_y ?? ''}" placeholder="none"></td>
       <td><input type="number" data-i="${i}" data-k="lengthen" value="${p.lengthen || ''}" placeholder="0"></td>
       <td><input type="number" data-i="${i}" data-k="lengthen_at" value="${p.lengthen_at ?? ''}" placeholder="none"></td></tr>`;
@@ -178,6 +179,16 @@ function renderPieces() {
     else if (k === 'grain_deg') { p.grain_override = el.value === 'auto' ? null : parseFloat(el.value); }
     else p[k] = el.value;
     if (k === 'match_y' || k === 'lengthen_at') renderPieces();
+  });
+  $('pieces').querySelectorAll('[data-fold]').forEach(b => b.onclick = async () => {
+    pieces[b.dataset.fold].on_fold_mark = true; collect(); await loadPieces();
+  });
+  $('pieces').querySelectorAll('[data-join]').forEach(sel => sel.onchange = async () => {
+    // joining renumbers the pieces, so earlier review choices start afresh
+    const upper = +sel.dataset.join;
+    project.joins = (project.joins || []).filter(([u]) => u !== upper);
+    if (sel.value !== '') project.joins.push([upper, +sel.value]);
+    project.pieces = []; await loadPieces();
   });
   $('pieces').querySelectorAll('svg.thumb').forEach(svg => svg.onclick = ev => {
     const p = pieces[svg.dataset.i], pt = svg.createSVGPoint();
@@ -195,11 +206,12 @@ function fillFabric(f) {
 }
 
 function collect() {
-  project.pieces = pieces.map(p => {
+  project.pieces = pieces.map((p, i) => {
     const c = {name: p.name, copies: p.copies, include: p.include, fabric: p.fabric || 'main', cross_grain: p.cross_grain,
                mirror: p.mirror, cut_on_fold: p.cut_on_fold, match_y: p.match_y,
                lengthen: p.lengthen || 0, lengthen_at: p.lengthen_at};
     if (p.grain_override != null) c.grain_deg = p.grain_override;
+    if (p.on_fold_mark || (project.pieces[i] || {}).on_fold) c.on_fold = true;
     return c;
   });
   project.fabric = {width: +$('width').value, gap: +$('gap').value, one_way: $('oneway').checked,

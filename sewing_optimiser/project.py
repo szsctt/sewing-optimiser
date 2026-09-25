@@ -9,12 +9,13 @@ import pymupdf
 from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
+from .edit import join, mark_on_fold
 from .layout import FabricSettings
-from .pdf_import import JOIN_GAP, Piece, _notches, extract_pieces, pieces_from_outlines, sheet_lines, sheet_text, sheets
+from .pdf_import import JOIN_GAP, Piece, list_sizes, size_key, text_rectangles, _notches, extract_pieces, pieces_from_outlines, sheet_lines, sheet_text, sheets
 
 PROJECTS = Path(__file__).parent.parent / "projects"
 PIECE_FIELDS = ("name", "copies", "include", "fabric", "cross_grain", "mirror", "cut_on_fold", "match_y", "grain_deg",
-                "lengthen", "lengthen_at")
+                "lengthen", "lengthen_at")  # choices by index in the final list; "on_fold" marks a piece as a half on the fold
 
 
 def default(pdf, size=None):
@@ -24,6 +25,7 @@ def default(pdf, size=None):
         "picked": None,  # {page: [[[x, y], ...], ...]} outlines picked by hand, mm; None to find them
         "pieces": [],  # review choices by piece index, keys from PIECE_FIELDS
         "rectangles": [],  # pieces given only by size: {"name", "width", "length", "copies"}, mm
+        "joins": None,  # [upper, lower]: pieces drawn in two parts, by index as read; None: guess
         "fabric": asdict(FabricSettings()) | {"shape": None},
     }
 
@@ -61,13 +63,42 @@ def pieces(project):
                 found.append(piece)
     else:
         found = extract_pieces(project["pdf"], project["size"])
+    for i, piece in enumerate(found):
+        piece.source = i
+    joins = project.get("joins")
+    if joins is None:
+        joins = project["joins"] = _front_back(found)
+    for upper, lower in joins:  # indices of pieces as read
+        joined = join(found[upper], found[lower]) if max(upper, lower) < len(found) else None
+        if joined is not None:
+            found[upper], found[lower] = joined, None
+    found = [p for p in found if p is not None]
+    size_name = dict(list_sizes(project["pdf"])).get(project["size"], project["size"] or "").split(" (")[0]
+    for r in text_rectangles(project["pdf"]):  # stretch (across the grain) along the longer side
+        if size_key(size_name) in r["sizes"]:
+            a, b = r["sizes"][size_key(size_name)]
+            # the size given for this size replaces a drawing of the same piece
+            found = [p for p in found if not p.name.lower().startswith(r["name"].lower())]
+            found.append(Piece(f"{r['name']} ({size_name})", box(0, 0, max(a, b), min(a, b)), 90.0, r["copies"]))
     for r in project.get("rectangles", []):  # length runs along the grain
         found.append(Piece(r["name"], box(0, 0, r["width"], r["length"]), 90.0, r.get("copies", 1)))
-    for piece, choices in zip(found, project["pieces"]):
+    for i, choices in enumerate(project["pieces"][:len(found)]):
+        if choices.get("on_fold"):
+            found[i] = mark_on_fold(found[i])
         for key in PIECE_FIELDS:
             if key in choices:
-                setattr(piece, key, choices[key])
+                setattr(found[i], key, choices[key])
     return found
+
+
+def _front_back(found):
+    """Guess joins: a 'Front of the X' drawn separately from its 'Back of the X' (one piece in home-made patterns)."""
+    named = {}
+    for i, p in enumerate(found):
+        m = re.search(r"\b(front|back) of (?:the )?(\w+)", p.name, re.I)
+        if m:
+            named.setdefault(m.group(2).lower(), {})[m.group(1).lower()] = i
+    return [[pair["front"], pair["back"]] for pair in named.values() if len(pair) == 2]
 
 
 def fabric_settings(project):
