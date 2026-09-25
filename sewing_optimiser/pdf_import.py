@@ -525,6 +525,31 @@ def _notches(lines, outlines):
     return marks
 
 
+def _owners(texts, outlines):
+    """The outline each text line belongs to (None if none is near).
+
+    Text inside a piece belongs to it. A label block outside every piece
+    (consecutive lines less than 10 mm apart) goes as a whole to the piece
+    nearest on average, so its name and cut count stay together.
+    """
+    if not outlines:
+        return [None] * len(texts)
+    dists = [[o.distance(c) for o in outlines] for _, c, _ in texts]
+    blocks, start = [], 0
+    for k in range(1, len(texts) + 1):
+        if k == len(texts) or texts[k][1].distance(texts[k - 1][1]) > 10 or min(dists[k]) == 0:
+            blocks.append(range(start, k))
+            start = k
+    owner = [None] * len(texts)
+    for block in blocks:
+        mean = [sum(dists[k][j] for k in block) / len(block) for j in range(len(outlines))]
+        for k in block:
+            inside = [j for j in range(len(outlines)) if dists[k][j] == 0]
+            j = inside[0] if inside else min(range(len(outlines)), key=mean.__getitem__)
+            owner[k] = j if dists[k][j] <= LABEL_MAX_DIST_MM else None
+    return owner
+
+
 def pieces_from_outlines(texts, outlines, marks=None):
     """Attach names, cut counts, grainlines and fold edges from text lines (see sheet_text) to outlines."""
     marks = marks or [MultiLineString() for _ in outlines]
@@ -532,11 +557,11 @@ def pieces_from_outlines(texts, outlines, marks=None):
     names = [[] for _ in outlines]
     grain = [None] * len(outlines)
     folds = [[] for _ in outlines]
-    for text, centre, direction in texts if outlines else []:
-        dists = [o.distance(centre) for o in outlines]
-        i = min(range(len(outlines)), key=dists.__getitem__)
-        if dists[i] > LABEL_MAX_DIST_MM:
+    owner = _owners(texts, outlines)
+    for (text, centre, direction), i in zip(texts, owner):
+        if i is None:
             continue
+        dists = [o.distance(centre) for o in outlines]
         if "grain" in text.lower():
             grain[i] = direction  # the word runs along the grainline arrow
         if "fold" in text.lower() and dists[i] <= FOLD_TEXT_DIST:
@@ -553,17 +578,19 @@ def pieces_from_outlines(texts, outlines, marks=None):
         near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
         named = [m.group(1) for t in texts if (m := NAMED_CUT.match(t)) and not re.search(NOT_NAME, m.group(1), re.I)]
         named += [before for before, t in zip(texts, texts[1:])  # a name on the line above 'Cut 1 Pair Self'
-                  if re.match(r"cut\s*\d", t, re.I) and not re.search(NOT_NAME, before, re.I)]
+                  if re.match(r"cut\s*\d", t, re.I) and not re.search(r"^cut\b|grain|\bfold\b|^sizes?\b|^[\d\s-]+$", before, re.I)]
         name = named[0] if named else " ".join(name_parts or near[:1])
         name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0].strip() or "piece"  # drop instructions
         copies = int(cut.group(1)) * (2 if cut.group(2) else 1) if cut else 1
         on_fold = any(ON_FOLD.search(t) for _, _, t in fold_texts)
         unfolded = _unfold(outline, notches, [(c, d) for c, d, _ in fold_texts], g) if on_fold else None
+        fabric = "interfacing" if re.search(r"interfacing", name, re.I) else "main"
         if unfolded:
             full, both, edge = unfolded
-            pieces.append(Piece(name, full, g, copies, half=outline, fold_edge=edge, marks=both, half_marks=notches))
+            pieces.append(Piece(name, full, g, copies, half=outline, fold_edge=edge, marks=both, half_marks=notches,
+                                fabric=fabric))
         else:
-            pieces.append(Piece(name, outline, g, copies, marks=notches))
+            pieces.append(Piece(name, outline, g, copies, marks=notches, fabric=fabric))
     return pieces
 
 
