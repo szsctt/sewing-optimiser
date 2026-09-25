@@ -3,6 +3,7 @@
 Run with `pixi run app`, then open http://localhost:8000.
 """
 
+import re
 from pathlib import Path
 
 import pymupdf
@@ -107,6 +108,16 @@ def _abs(project):
     return dict(project, pdf=str(_pdf(project["pdf"])))
 
 
+def _part(region, w, h):
+    """A part of a piece for the page: its outline and a label saying where it is and how big."""
+    c = region.centroid
+    across = "left" if c.x < w / 3 else "right" if c.x > 2 * w / 3 else ""
+    along = "top" if c.y < h / 3 else "bottom" if c.y > 2 * h / 3 else ""
+    where = " ".join(x for x in (along, across) if x) or "middle"
+    x0, y0, x1, y1 = region.bounds
+    return {"d": _path_d(region), "label": f"part at the {where}, {(x1 - x0) / 10:.0f} × {(y1 - y0) / 10:.0f} cm"}
+
+
 @app.post("/api/pieces")
 def get_pieces(project: dict):
     out = []
@@ -116,14 +127,18 @@ def get_pieces(project: dict):
         minx, miny, maxx, maxy = aligned.bounds
         aligned = affinity.translate(aligned, -minx, -miny)
         # parts are drawn over the picture so they can be clicked off or back on
-        parts = [{"d": _path_d(affinity.translate(_align(r, p.grain_deg), -minx, -miny)), "label": label}
-                 for r, label in zip(p.regions, p.region_labels)]
+        parts = [_part(affinity.translate(_align(r, p.grain_deg), -minx, -miny), maxx - minx, maxy - miny)
+                 for r in p.regions]
+        biggest = max(range(len(parts)), key=lambda k: p.regions[k].area) if parts else None
+        if parts:
+            parts[biggest]["label"] = "main part"
+        says = list(dict.fromkeys(t for t in p.region_labels if re.search(r"\bcut\b", t, re.I)))
         out.append({
             "index": i, "name": p.name, "copies": p.copies, "include": p.include, "fabric": p.fabric,
             "cross_grain": p.cross_grain, "mirror": p.mirror, "cut_on_fold": p.cut_on_fold,
             "match_y": p.match_y, "grain_deg": p.grain_deg, "on_fold": p.half is not None, "page": p.page,
             "lengthen": p.lengthen, "lengthen_at": p.lengthen_at, "source": p.source,
-            "d": _path_d(aligned), "w": maxx - minx, "h": maxy - miny, "parts": parts,
+            "d": _path_d(aligned), "w": maxx - minx, "h": maxy - miny, "parts": parts, "says": says,
             "trim": getattr(p, "trimmed", []),
         })
     return {"pieces": out, "joins": full["joins"]}

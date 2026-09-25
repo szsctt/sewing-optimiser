@@ -22,7 +22,14 @@
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { font-weight: 600; color: var(--muted); font-size: 12px; }
   td input[type=text] { width: 100%; min-width: 120px; }
-  .thumb { overflow: visible; width: 90px; height: 90px; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
+  .thumb { overflow: visible; width: 90px; height: 90px; background: #fff; border: 1px solid var(--line); cursor: zoom-in; }
+  dialog#editor { width: min(1000px, 95vw); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  #editor .body { display: flex; gap: 16px; flex-wrap: wrap; }
+  #editor svg { width: min(600px, 90vw); height: 70vh; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
+  #editor path[data-part] { cursor: pointer; }
+  #editor path[data-part]:hover { fill: rgba(0,102,255,0.2); }
+  #editor .side { flex: 1; min-width: 220px; }
+  #editor .side label { display: flex; margin: 4px 0; }
   .muted { color: var(--muted); }
   .layouts svg { width: 100%; height: auto; background: #fff; border: 1px solid var(--line); }
   .stats { margin: 8px 0; }
@@ -58,11 +65,8 @@
   <section id="pieces-section" class="hidden">
     <h2>Pieces</h2>
     <p class="muted">Untick option pieces you are not making. Pictures are turned so the grainline runs down the page.</p>
-    <div class="row"><label>Clicking a picture sets the
-      <select id="clickmode"><option value="match_y">stripe match line (red)</option><option value="lengthen_at">lengthen/shorten line (blue)</option>
-        <option value="trim">option part to leave off or put back (dashed)</option></select></label></div>
-    <p class="muted">Lines inside a piece, such as "cut at the shorter line for cuffs", split it into parts, shown dashed.
-      To cut a shorter or narrower option, leave its extra part off.</p>
+    <p class="muted">Click a piece's picture to open it large, to set its stripe match line or lengthen line,
+      or to choose between cutting options (parts shown dashed).</p>
     <table><thead><tr><th>Use</th><th>Piece</th><th>Name</th><th>Copies</th><th>Fabric</th><th>Grainline</th>
       <th>Cross-grain</th><th>Mirror pairs</th><th>On fold</th><th>Join with</th><th>Match line (mm)</th><th>Lengthen by (mm)</th><th>at (mm)</th></tr></thead>
       <tbody id="pieces"></tbody></table>
@@ -74,6 +78,17 @@
       <button id="r-add">Add</button></div>
     <div id="rects" class="muted"></div>
   </section>
+
+  <dialog id="editor">
+    <div class="row" style="justify-content:space-between"><h2 id="ed-title" style="margin:0"></h2><button id="ed-close">Done</button></div>
+    <div class="row">Clicking the piece sets:
+      <label><input type="radio" name="ed-mode" value="trim" checked> cutting options</label>
+      <label><input type="radio" name="ed-mode" value="match_y"> stripe match line (red)</label>
+      <label><input type="radio" name="ed-mode" value="lengthen_at"> lengthen/shorten line (blue)</label></div>
+    <div class="body"><div id="ed-view"></div>
+      <div class="side"><div id="ed-parts"></div><p id="ed-lines" class="muted"></p>
+        <p class="muted">Set how much to lengthen in the table's "Lengthen by" column.</p></div></div>
+  </dialog>
 
   <section id="fabric-section" class="hidden">
     <h2>Fabric</h2>
@@ -173,18 +188,23 @@ async function loadPieces() {
   renderPieces();
 }
 
+/* A piece's picture: outline, grainline, match (red) and lengthen (blue) lines, option parts (dashed; red when left off). */
+function pieceSvg(p, i, px, cls) {
+  const s = (px - 10) / Math.max(p.w, p.h);
+  const line = (y, colour) => y == null ? '' : `<line x1="0" x2="${p.w}" y1="${y}" y2="${y}" stroke="${colour}" stroke-width="${1.5 / s}"/>`;
+  const parts = (p.parts || []).map((part, k) => `<path data-part="${k}" d="${part.d}" stroke="#06f" stroke-dasharray="${4 / s} ${3 / s}"
+    stroke-width="${1.2 / s}" fill="${p.trim.includes(k) ? 'rgba(200,0,0,0.3)' : 'transparent'}"><title>${part.label || 'part ' + (k + 1)}</title></path>`).join('');
+  return `<svg class="${cls}" data-i="${i}" viewBox="${-5 / s} ${-5 / s} ${px / s} ${px / s}">
+    <path d="${p.d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>
+    <line x1="${p.w / 2}" x2="${p.w / 2}" y1="${p.h * 0.2}" y2="${p.h * 0.8}" stroke="#999" stroke-width="${1 / s}"/>
+    ${line(p.match_y, '#e33')}${line(p.lengthen_at, '#06f')}${parts}</svg>`;
+}
+
 function renderPieces() {
   $('pieces').innerHTML = pieces.map((p, i) => {
-    const s = 80 / Math.max(p.w, p.h);
-    const line = (y, colour) => y == null ? '' : `<line x1="0" x2="${p.w}" y1="${y}" y2="${y}" stroke="${colour}" stroke-width="${1.5 / s}"/>`;
-    const match = line(p.match_y, '#e33') + line(p.lengthen_at, '#06f');
-    const parts = (p.parts || []).map((part, k) => `<path data-part="${k}" d="${part.d}" stroke="#06f" stroke-dasharray="${3 / s} ${2 / s}"
-      stroke-width="${1 / s}" fill="${p.trim.includes(k) ? 'rgba(200,0,0,0.25)' : 'transparent'}"><title>${part.label || 'part ' + (k + 1)}</title></path>`).join('');
     return `<tr>
       <td><input type="checkbox" data-i="${i}" data-k="include" ${p.include ? 'checked' : ''}></td>
-      <td><svg class="thumb" data-i="${i}" viewBox="${-5 / s} ${-5 / s} ${90 / s} ${90 / s}">
-        <path d="${p.d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>
-        <line x1="${p.w / 2}" x2="${p.w / 2}" y1="${p.h * 0.2}" y2="${p.h * 0.8}" stroke="#999" stroke-width="${1 / s}"/>${match}${parts}</svg></td>
+      <td>${pieceSvg(p, i, 90, 'thumb')}</td>
       <td><input type="text" data-i="${i}" data-k="name" value="${p.name.replace(/"/g, '&quot;')}"></td>
       <td><input type="number" min="0" data-i="${i}" data-k="copies" value="${p.copies}"></td>
       <td><input type="text" style="min-width:70px;width:80px" data-i="${i}" data-k="fabric" value="${p.fabric}"></td>
@@ -221,20 +241,7 @@ function renderPieces() {
     if (sel.value !== '') project.joins.push([upper, +sel.value]);
     project.pieces = []; await loadPieces();
   });
-  $('pieces').querySelectorAll('svg.thumb').forEach(svg => svg.onclick = async ev => {
-    const p = pieces[svg.dataset.i], pt = svg.createSVGPoint();
-    if ($('clickmode').value === 'trim') {
-      const part = ev.target.dataset.part;
-      if (part === undefined) return;
-      p.trim = p.trim.includes(+part) ? p.trim.filter(k => k !== +part) : [...p.trim, +part];
-      collect(); await loadPieces();
-      return;
-    }
-    pt.x = ev.clientX; pt.y = ev.clientY;
-    const q = pt.matrixTransform(svg.getScreenCTM().inverse());
-    p[$('clickmode').value] = Math.max(0, Math.min(p.h, Math.round(q.y)));
-    renderPieces();
-  });
+  $('pieces').querySelectorAll('svg.thumb').forEach(svg => svg.onclick = () => openEditor(+svg.dataset.i));
 }
 
 function fillFabric(f) {
@@ -292,6 +299,47 @@ $('r-add').onclick = async () => {
   project.rectangles = [...(project.rectangles || []), {name: $('r-name').value || 'rectangle', width: w, length: l, copies: +$('r-n').value || 1}];
   await loadPieces();
 };
+
+/* ---------- large view of one piece ---------- */
+let editing = null;
+function openEditor(i) {
+  editing = i;
+  const p = pieces[i];
+  $('ed-title').textContent = p.name;
+  $('ed-view').innerHTML = pieceSvg(p, i, 600, 'big');
+  $('ed-parts').innerHTML = (p.parts || []).length
+    ? '<p><b>Cutting options.</b> Untick a part to leave it off (hover a part to see it).</p>' +
+      (p.says.length ? `<p class="muted">The pattern says: ${p.says.join('; ')}</p>` : '') + p.parts.map((part, k) =>
+        `<label data-hover="${k}"><input type="checkbox" data-part="${k}" ${p.trim.includes(k) ? '' : 'checked'}> ${part.label || 'part ' + (k + 1)}</label>`).join('')
+    : '<p class="muted">No cutting options drawn inside this piece.</p>';
+  $('ed-lines').textContent = `Match line: ${p.match_y ?? 'none'}${p.match_y != null ? ' mm' : ''}. ` +
+    `Lengthen line: ${p.lengthen_at ?? 'none'}${p.lengthen_at != null ? ' mm' : ''}${p.lengthen ? `, by ${p.lengthen} mm` : ''}.`;
+  $('ed-parts').querySelectorAll('input[data-part]').forEach(box => box.onchange = () => togglePart(+box.dataset.part));
+  $('ed-parts').querySelectorAll('[data-hover]').forEach(row => {
+    const path = () => $('ed-view').querySelector(`path[data-part="${row.dataset.hover}"]`);
+    row.onmouseenter = () => path().setAttribute('fill', 'rgba(0,102,255,0.3)');
+    row.onmouseleave = () => openEditor(editing);
+  });
+  const svg = $('ed-view').querySelector('svg');
+  svg.onclick = ev => {
+    const mode = document.querySelector('input[name="ed-mode"]:checked').value;
+    if (mode === 'trim') {
+      if (ev.target.dataset.part !== undefined) togglePart(+ev.target.dataset.part);
+      return;
+    }
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    p[mode] = Math.max(0, Math.min(p.h, Math.round(pt.matrixTransform(svg.getScreenCTM().inverse()).y)));
+    renderPieces(); openEditor(i);
+  };
+  if (!$('editor').open) $('editor').showModal();
+}
+async function togglePart(k) {
+  const p = pieces[editing];
+  p.trim = p.trim.includes(k) ? p.trim.filter(x => x !== k) : [...p.trim, k];
+  collect(); await loadPieces(); openEditor(editing);
+}
+$('ed-close').onclick = () => $('editor').close();
 
 /* ---------- picking pieces by hand ---------- */
 async function showPick() {
