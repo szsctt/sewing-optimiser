@@ -12,7 +12,7 @@ unfolded layout is used instead when it needs less fabric.
 from dataclasses import dataclass, field
 
 from shapely import affinity
-from shapely.geometry import JOIN_STYLE, Point, box
+from shapely.geometry import JOIN_STYLE, LineString, Point, box
 
 from .nest import Instance, Stripes, nest, rectangle
 
@@ -80,6 +80,16 @@ def _fold_half(piece, sa):
     return affinity.translate(grown, -a.x, 0), affinity.translate(marks, -a.x, 0)
 
 
+def _fold_line(piece):
+    """The fold line across the whole aligned piece, or None if it has no fold."""
+    if piece.fold_edge is None:
+        return None
+    (ax, ay), (bx, by) = piece.fold_edge
+    dx, dy = bx - ax, by - ay
+    long = LineString([(ax - dx * 100, ay - dy * 100), (bx + dx * 100, by + dy * 100)])
+    return _align(long.intersection(piece.outline), piece.grain_deg)
+
+
 def _instances(pieces, s, folding):
     """(double-layer instances, single-layer instances)."""
     double, single = [], []
@@ -87,6 +97,7 @@ def _instances(pieces, s, folding):
         rots = _rotations(piece, s.one_way)
         full = _grow(_align(piece.outline, piece.grain_deg), s.seam_allowance)
         marks = _align(piece.marks, piece.grain_deg)
+        fold_line = _fold_line(piece)
         match_y = piece.match_y + s.seam_allowance if s.stripe_repeat and piece.match_y is not None else None
         half = _fold_half(piece, s.seam_allowance) if folding and piece.half is not None and piece.cut_on_fold else None
         if half is not None:
@@ -102,12 +113,13 @@ def _instances(pieces, s, folding):
                 copy += 2
         for c in range(copy, piece.copies + 1):
             mirrored = piece.mirror and c % 2 == 0
-            shape, m = full, marks
+            shape, m, f = full, marks, fold_line
             if mirrored:
                 centre = full.centroid
                 shape, m = (affinity.scale(g, -1, 1, origin=centre) for g in (full, marks))
+                f = affinity.scale(f, -1, 1, origin=centre) if f is not None else None
             single.append(Instance(f"{piece.name} {c}/{piece.copies}" + (" (mirrored)" if mirrored else ""),
-                                   shape, rots, match_y, marks=m))
+                                   shape, rots, match_y, marks=m, fold_line=f))
     return double, single
 
 

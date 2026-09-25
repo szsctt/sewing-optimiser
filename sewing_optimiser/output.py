@@ -69,6 +69,10 @@ def layout_svg(layout, stripes=None, inverted=False, calibration=True):
         out += _grainline(p)
         for mark in getattr(p.marks, "geoms", []):
             out.append(f'<polyline points="{_points(mark.coords)}" stroke-width="0.8"/>')
+        for line in getattr(p.fold_line, "geoms", [p.fold_line] if p.fold_line is not None else []):
+            out.append(f'<polyline points="{_points(line.coords)}" stroke-dasharray="10 3 2 3"/>')
+            (x, y) = line.coords[0]
+            out.append(f'<text x="{x + 2:.1f}" y="{y + 12:.1f}" fill="{fg}" stroke="none">fold</text>')
         c = p.outline.representative_point()
         out.append(f'<text x="{c.x + 4:.1f}" y="{c.y:.1f}" fill="{fg}" stroke="none">{escape(p.instance.label)}</text>')
     title = f"{layout.fabric}: length used {length:.0f} mm, width used {layout.width_used:.0f} mm"
