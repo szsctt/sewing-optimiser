@@ -16,7 +16,7 @@ This writes `output/cuff-2-3t.svg` and `.pdf` at 1:1 scale, with a 10 cm check s
 
 ## Current limits
 
-- Single-page PDFs (projector or A0) with one layer per size.
+- Single-page PDFs (projector or A0) with one layer per size, where each size layer holds complete outlines (Brindille & Twig works; Make by TFS, which draws shared edges on a base layer, does not yet).
 - The grainline is taken from the direction of the word "grainline" inside each piece; pieces without it are assumed vertical.
-- Cut-on-fold pieces are reported but not unfolded.
+- Pieces labelled "on fold" are mirrored across their fold edge for single-layer cutting. The fold edge is the long straight edge, parallel to the fold label or grainline, closest to the fold label.
 - Nesting is greedy bottom-left placement.

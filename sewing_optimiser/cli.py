@@ -27,7 +27,7 @@ def main():
     pieces = extract_pieces(args.pdf, args.size)
     for p in pieces:
         grain = "not found, assumed vertical" if p.grain_deg is None else f"{p.grain_deg:.0f}°"
-        fold = ", on fold (not yet unfolded)" if p.on_fold else ""
+        fold = ", unfolded from half on fold" if p.unfolded else ""
         print(f"{p.name}: cut {p.copies}, grainline {grain}{fold}")
 
     placements, length, used_width, utilisation = nest(pieces, args.width, args.gap, allow_180=not args.one_way)
