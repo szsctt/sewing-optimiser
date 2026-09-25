@@ -3,10 +3,12 @@
 import argparse
 from pathlib import Path
 
+from shapely.geometry import box
+
 from .layout import FabricSettings, make_layouts
 from .nest import Stripes
 from .output import write_pdf, write_svg
-from .pdf_import import extract_pieces, list_sizes
+from .pdf_import import Piece, extract_pieces, list_sizes
 
 
 def _matches(piece, texts):
@@ -27,6 +29,10 @@ def main():
                     help="leave out pieces whose name contains TEXT (e.g. 'short sleeve'); repeatable")
     ap.add_argument("--cross-grain", action="append", default=[], metavar="TEXT",
                     help="pieces whose name contains TEXT may also turn 90°; repeatable")
+    ap.add_argument("--rect", action="append", default=[], metavar="NAME:WxL:N",
+                    help="add a rectangle piece, e.g. 'Waistband:305x102:1' (width x length along the grain, mm; copies)")
+    ap.add_argument("--lengthen", action="append", default=[], metavar="TEXT:MM@AT",
+                    help="lengthen pieces whose name contains TEXT by MM (negative shortens) at AT mm below their top")
     ap.add_argument("--tries", type=int, default=8, help="piece orders to try; more is slower and may be shorter")
     ap.add_argument("--out", default="layout", help="output path without extension")
     args = ap.parse_args()
@@ -39,6 +45,12 @@ def main():
         ap.error("--width is required with --size")
 
     pieces = extract_pieces(args.pdf, args.size or None)
+    for spec in args.lengthen:
+        text, change = spec.rsplit(":", 1)
+        amount, at = (float(v) for v in change.split("@"))
+        for p in pieces:
+            if _matches(p, [text]):
+                p.lengthen, p.lengthen_at = amount, at
     for p in pieces:
         p.include = not _matches(p, args.skip)
         p.cross_grain = _matches(p, args.cross_grain)
@@ -47,6 +59,12 @@ def main():
         grain = "not found, assumed vertical" if p.grain_deg is None else f"{p.grain_deg:.0f}°"
         fold = ", on fold" if p.half is not None else ""
         print(f"{p.name}: {'cut ' + str(p.copies) if p.include else 'skipped'}, grainline {grain}{fold}")
+
+    for spec in args.rect:  # added after --skip, which applies to the PDF's pieces
+        name, size, copies = spec.split(":")
+        w, l = (float(v) for v in size.lower().split("x"))
+        pieces.append(Piece(name, box(0, 0, w, l), 90.0, int(copies)))
+        print(f"{name}: cut {copies}, {w:.0f} x {l:.0f} mm")
 
     settings = FabricSettings(args.width, gap=args.gap, one_way=args.one_way, seam_allowance=args.seam_allowance,
                               stripe_repeat=args.stripes, tries=args.tries)

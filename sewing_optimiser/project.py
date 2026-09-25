@@ -6,14 +6,15 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pymupdf
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 from .layout import FabricSettings
-from .pdf_import import JOIN_GAP, _notches, extract_pieces, pieces_from_outlines, sheet_lines, sheet_text, sheets
+from .pdf_import import JOIN_GAP, Piece, _notches, extract_pieces, pieces_from_outlines, sheet_lines, sheet_text, sheets
 
 PROJECTS = Path(__file__).parent.parent / "projects"
-PIECE_FIELDS = ("name", "copies", "include", "fabric", "cross_grain", "mirror", "cut_on_fold", "match_y", "grain_deg")
+PIECE_FIELDS = ("name", "copies", "include", "fabric", "cross_grain", "mirror", "cut_on_fold", "match_y", "grain_deg",
+                "lengthen", "lengthen_at")
 
 
 def default(pdf, size=None):
@@ -22,6 +23,7 @@ def default(pdf, size=None):
         "size": size,  # PDF layer, or None for every line
         "picked": None,  # {page: [[[x, y], ...], ...]} outlines picked by hand, mm; None to find them
         "pieces": [],  # review choices by piece index, keys from PIECE_FIELDS
+        "rectangles": [],  # pieces given only by size: {"name", "width", "length", "copies"}, mm
         "fabric": asdict(FabricSettings()) | {"shape": None},
     }
 
@@ -59,6 +61,8 @@ def pieces(project):
                 found.append(piece)
     else:
         found = extract_pieces(project["pdf"], project["size"])
+    for r in project.get("rectangles", []):  # length runs along the grain
+        found.append(Piece(r["name"], box(0, 0, r["width"], r["length"]), 90.0, r.get("copies", 1)))
     for piece, choices in zip(found, project["pieces"]):
         for key in PIECE_FIELDS:
             if key in choices:

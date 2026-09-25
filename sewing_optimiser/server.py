@@ -111,6 +111,7 @@ def get_pieces(project: dict):
             "index": i, "name": p.name, "copies": p.copies, "include": p.include, "fabric": p.fabric,
             "cross_grain": p.cross_grain, "mirror": p.mirror, "cut_on_fold": p.cut_on_fold,
             "match_y": p.match_y, "grain_deg": p.grain_deg, "on_fold": p.half is not None, "page": p.page,
+            "lengthen": p.lengthen, "lengthen_at": p.lengthen_at,
             "d": _path_d(aligned), "w": maxx - minx, "h": maxy - miny,
         })
     return out

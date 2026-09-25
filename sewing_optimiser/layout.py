@@ -9,10 +9,11 @@ layer to the right of the strip. Several strip widths are tried, and the
 unfolded layout is used instead when it needs less fabric.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from shapely import affinity
-from shapely.geometry import JOIN_STYLE, LineString, Point, box
+from shapely.geometry import JOIN_STYLE, LineString, MultiLineString, Point, box
+from shapely.ops import unary_union
 
 from .nest import Instance, Stripes, nest, rectangle
 
@@ -90,10 +91,50 @@ def _fold_line(piece):
     return _align(long.intersection(piece.outline), piece.grain_deg)
 
 
+def _stretch(geom, y0, amount):
+    """Lengthen (amount > 0) or shorten a shape along y at the line y = y0."""
+    if geom is None or geom.is_empty or not amount:
+        return geom
+    if geom.geom_type in ("LineString", "MultiLineString"):
+        parts = getattr(geom, "geoms", [geom])
+        moved = [affinity.translate(g, 0, amount) if g.centroid.y > y0 else g for g in parts]
+        return MultiLineString(moved) if geom.geom_type == "MultiLineString" else moved[0]
+    big = 1e6
+    top = geom.intersection(box(-big, -big, big, y0))
+    cut = y0 if amount > 0 else y0 - amount
+    bottom = affinity.translate(geom.intersection(box(-big, cut, big, big)), 0, amount)
+    parts = [top, bottom]
+    if amount > 0:  # fill the gap with the piece's cross-section at y0
+        section = geom.intersection(LineString([(-big, y0), (big, y0)]))
+        for seg in getattr(section, "geoms", [section]):
+            if seg.geom_type == "LineString" and seg.length > 0:
+                (x0, _), (x1, _) = seg.coords[0], seg.coords[-1]
+                parts.append(box(min(x0, x1), y0, max(x0, x1), y0 + amount))
+    joined = unary_union([p for p in parts if not p.is_empty]).buffer(0.01).buffer(-0.01)
+    return max(getattr(joined, "geoms", [joined]), key=lambda g: g.area)
+
+
+def _lengthened(piece):
+    """A copy of the piece lengthened or shortened along the grain, in page coordinates."""
+    if not piece.lengthen or piece.lengthen_at is None:
+        return piece
+    grain = piece.grain_deg % 180 if piece.grain_deg is not None else 90.0
+    back = lambda g: affinity.rotate(g, grain - 90.0, origin=(0, 0)) if g is not None else None
+    y0 = _align(piece.outline, piece.grain_deg).bounds[1] + piece.lengthen_at
+    change = lambda g: back(_stretch(_align(g, piece.grain_deg), y0, piece.lengthen)) if g is not None else None
+    edge = None
+    if piece.fold_edge is not None:
+        a, b = (_align(Point(p), piece.grain_deg) for p in piece.fold_edge)
+        a, b = (back(Point(q.x, q.y + (piece.lengthen if q.y > y0 else 0))) for q in (a, b))
+        edge = ((a.x, a.y), (b.x, b.y))
+    return replace(piece, outline=change(piece.outline), half=change(piece.half), marks=change(piece.marks),
+                   half_marks=change(piece.half_marks), fold_edge=edge)
+
+
 def _instances(pieces, s, folding):
     """(double-layer instances, single-layer instances)."""
     double, single = [], []
-    for piece in pieces:
+    for piece in map(_lengthened, pieces):
         rots = _rotations(piece, s.one_way)
         full = _grow(_align(piece.outline, piece.grain_deg), s.seam_allowance)
         marks = _align(piece.marks, piece.grain_deg)

@@ -35,6 +35,8 @@ class Piece:
     mirror: bool = True  # every second copy is mirrored (left/right pairs)
     cut_on_fold: bool = True  # for pieces with a half: cut on a folded strip, else unfolded
     match_y: float | None = None  # stripe match line, mm below the top of the grain-aligned piece
+    lengthen: float = 0.0  # mm added (or, if negative, removed) along the grain ...
+    lengthen_at: float | None = None  # ... at this many mm below the top of the grain-aligned piece
     page: int = 0  # sheet number (tiled pages joined count as one sheet)
     marks: MultiLineString = field(default_factory=MultiLineString)  # notches, same coordinates as outline
     half_marks: MultiLineString = field(default_factory=MultiLineString)  # notches of `half`
@@ -80,21 +82,25 @@ def list_sizes(path):
     layers = list_layers(path)
     if layers:
         return [(name, name) for name in layers]
-    names = {}
+    names, sized = {}, set()
     for page in doc:
         for d in page.get_drawings():
-            if "s" not in d["type"] or _black(d):
+            if "s" not in d["type"]:
                 continue
             key = _style(d)
             r = d["rect"]
             if r.height < 2 and r.width < 150:  # a short horizontal legend sample, under its size name
                 above = sorted((r.y0 - tr.y1, t) for t, tr in _text_lines(page)
-                               if tr.y1 <= r.y0 + 2 and tr.x0 > r.x0 - 5 and r.y0 - tr.y1 < 40)
+                               if tr.y1 <= r.y0 + 2 and tr.x0 > r.x0 - 10 and r.y0 - tr.y1 < 40)
                 named = [t for _, t in above if t[0].isupper()]
                 if named:
                     names[key] = named[0].split(" ")[0].rstrip(",:")
-            names.setdefault(key, None)
-    return [("style:" + k, f"{v or 'lines'} ({k})") for k, v in names.items()]
+                    if _black(d):
+                        sized.add(key)  # black lines are shared by every size, unless the legend names them
+            if not _black(d) and (len(d["items"]) > 1 or d["items"][0][0] != "l"):  # straight lines (tape lines) are not sizes
+                sized.add(key)
+    sizes = [("style:" + k, f"{names.get(k) or 'lines'} ({k})") for k in sized]
+    return sizes if len(sizes) > 1 else []
 
 
 def _text_lines(page):
@@ -198,7 +204,59 @@ def sheets(doc):
                         queue.append(b)
         groups.append(sorted(group))
     groups = _fill_grid(groups, offset)
+    groups = _tape_pages(doc, groups, offset)
     return [[(n, offset[n][0] * MM_PER_PT, offset[n][1] * MM_PER_PT) for n in g] for g in groups]
+
+
+def _tape_lines(page):
+    """Straight coloured dotted lines at least 80 mm long, by style: the 'tape here' lines of home-made patterns."""
+    found = {}
+    for d in page.get_drawings():
+        dashes = (d.get("dashes") or "[]").strip("[] 0").split()
+        if ("s" in d["type"] and not _black(d) and dashes and float(dashes[0]) < 0.1
+                and len(d["items"]) == 1 and d["items"][0][0] == "l"):
+            a, b = d["items"][0][1:]
+            if abs(b - a) * MM_PER_PT >= 80:
+                found[_style(d)] = sorted([(a.x, a.y), (b.x, b.y)])
+    return found
+
+
+def _tape_pages(doc, groups, offset):
+    """Join consecutive lone pages that carry the same tape line, laying one line on the other.
+
+    The lines may differ in length, so both ends are tried and the one that
+    lands more of the second page's line ends on the first page's lines wins.
+    """
+    lone = [g[0] for g in groups if len(g) == 1]
+    joined = {}
+    for a, b in zip(lone, lone[1:]):
+        if b != a + 1:
+            continue
+        ta, tb = _tape_lines(doc[a]), _tape_lines(doc[b])
+        common = set(ta) & set(tb)
+        if not common:
+            continue
+        key = common.pop()
+        lines_a = [LineString(pl) for d in doc[a].get_drawings() if "s" in d["type"] for pl in _polylines(d["items"])]
+        ends_b = [pt for d in doc[b].get_drawings() if "s" in d["type"]
+                  for pl in _polylines(d["items"]) for pt in (pl[0], pl[-1])]
+        best = None
+        for end in (0, 1):
+            dx, dy = ta[key][end][0] - tb[key][end][0], ta[key][end][1] - tb[key][end][1]
+            hits = sum(1 for x, y in ends_b
+                       if any(l.distance(Point(x + dx * MM_PER_PT, y + dy * MM_PER_PT)) < 1.5 for l in lines_a))
+            if best is None or hits > best[0]:
+                best = (hits, dx, dy)
+        root = joined.get(a, a)
+        offset[b] = (offset[root][0] + best[1], offset[root][1] + best[2]) if root != a else (best[1], best[2])
+        if root != a:
+            offset[b] = (offset[a][0] + best[1], offset[a][1] + best[2])
+        joined[b] = root
+    merged = {}
+    for g in groups:
+        root = joined.get(g[0], g[0]) if len(g) == 1 else g[0]
+        merged.setdefault(root, []).extend(g)
+    return [sorted(g) for g in merged.values()]
 
 
 def _fill_grid(groups, offset, tol=15):
@@ -276,16 +334,26 @@ def _regions(lines, gap=GAP_CLOSE):
         for end in (Point(line.coords[0]), Point(line.coords[-1])):
             near = [o for o in others if 1e-6 < o.distance(end) < gap]
             if near and not any(o.distance(end) <= 1e-6 for o in others):
-                target = min(near, key=end.distance)
-                bridges.append(LineString([end, nearest_points(target, end)[0]]))
-    # grid snap joins near-coincident ends
-    return polygonize(set_precision(unary_union(lines + bridges), 0.01))
+                hit = nearest_points(min(near, key=end.distance), end)[0]
+                # overshoot slightly so the bridge crosses the line and is split there
+                dx, dy = hit.x - end.x, hit.y - end.y
+                k = 1 + 0.05 / max(end.distance(hit), 1e-9)
+                bridges.append(LineString([end, (end.x + dx * k, end.y + dy * k)]))
+    # grid snap joins near-coincident ends; bridges can also split a region oddly, so keep both results
+    plain = list(polygonize(set_precision(unary_union(lines), 0.01)))
+    bridged = list(polygonize(set_precision(unary_union(lines + bridges), 0.01))) if bridges else []
+    return plain + bridged
 
 
 def faces(lines):
     """Every closed region the lines form, as outlines without holes (for picking pieces by hand)."""
-    found = _regions(lines)
-    return [Polygon(f.exterior) for f in found if f.area > MIN_PIECE_AREA]
+    found, seen = [], set()
+    for f in _regions(lines):
+        key = tuple(round(v) for v in f.bounds) + (round(f.area),)
+        if f.area > MIN_PIECE_AREA and key not in seen:
+            seen.add(key)
+            found.append(Polygon(f.exterior))
+    return found
 
 
 def _outlines(lines, stroke):
