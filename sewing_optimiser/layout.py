@@ -189,17 +189,18 @@ def _single_layout(name, single, s, stripes, notes):
     return Layout(name, placements, length, used, shape, 0.0, notes)
 
 
-def _fold_layout(name, double, single, s, stripes, fold_width, tries):
+def _fold_layout(name, double, single, s, stripes, fold_width, tries, aim=None):
     """Double layer in [0, fold_width], single layer in [fold_width, width - fold_width]."""
     folded_width = s.width - fold_width
     length_bound = rectangle(0, pieces=[i.shape for i in double + single]).bounds[3]
     # left of x = 0 is the mirror image, used only by the fold edge's margin
     zone = box(-(s.gap + 10), 0, fold_width, length_bound)
-    placements, length, used = nest(double, zone, s.gap, stripes, tries, aim=s.aim)
+    placements, length, used = nest(double, zone, s.gap, stripes, tries, aim=aim or s.aim)
     if single:
         if folded_width - fold_width <= 0:
             raise ValueError("no single-layer fabric left")
-        more, l2, u2 = nest(single, box(fold_width, 0, folded_width, length_bound), s.gap, stripes, tries, aim=s.aim)
+        more, l2, u2 = nest(single, box(fold_width, 0, folded_width, length_bound), s.gap, stripes, tries,
+                            aim=aim or s.aim)
         placements, length, used = placements + more, max(length, l2), max(fold_width, u2)
     return Layout(name, placements, length, used, box(0, 0, folded_width, length), fold_width)
 
@@ -218,7 +219,8 @@ def _layout_group(name, group, s, stripes):
     width = narrowest
     while width <= s.width / 2:
         try:
-            trial = _fold_layout(name, double, single, s, stripes, width, tries=1)
+            # quick trials packed for length; the chosen width is packed with the real aim below
+            trial = _fold_layout(name, double, single, s, stripes, width, tries=1, aim="length")
         except ValueError:
             break
         if best is None or trial.score(s.aim) < best.score(s.aim):

@@ -288,7 +288,7 @@ function showCombined(entries) {
 }
 
 async function lay(request) {
-  $('run-status').textContent = 'Laying out…';
+  $('run-status').textContent = 'Laying out… many pieces, or aiming for narrowest or most compact, can take a minute.';
   try {
     const layouts = await request();
     $('result-section').classList.remove('hidden');

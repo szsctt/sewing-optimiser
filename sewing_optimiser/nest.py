@@ -122,7 +122,9 @@ def _place_all(instances, fabric, gap, stripes, order, aim="length"):
         best = None
         # positions lower than the current length plus this piece can only be worse
         tallest = max(v[3].shape[0] for v in inst.variants) if inst.variants else 0
-        reach = rows if aim == "width" else min(rows, int(used_len / RES) + 2 * tallest + 2)
+        # each piece may go at most two piece-heights beyond the layout so far; searching the whole
+        # length of fabric is slow, and a narrow layout still grows downwards a piece at a time
+        reach = min(rows, int(used_len / RES) + 2 * tallest + 2)
         grid = blocked[:reach].astype(np.float32)
         for rot, shape, extras, mask, margin, match_y in inst.variants:
             mh, mw = mask.shape
@@ -192,8 +194,9 @@ def nest(instances, fabric, gap=3.0, stripes=None, tries=8, seed=0, aim="length"
             for _ in range(max(1, len(order) // 3)):
                 j = rng.randrange(len(order) - 1) if len(order) > 1 else 0
                 order[j:j + 2] = order[j:j + 2][::-1]
-        # the smallest rectangle can come from packing for length or for width as well
-        for how in AIMS if aim == "compact" else (aim,):
+        # the smallest rectangle can also come from packing for length or for width; two tries of each
+        hows = (aim,) if aim != "compact" else ("compact", "length", "width") if t < 2 else ("compact",)
+        for how in hows:
             result = _place_all(instances, fabric, gap, stripes, order, how)
             if result and (best is None or score(aim, *result[1:]) < score(aim, *best[1:])):
                 best = result
