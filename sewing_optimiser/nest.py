@@ -103,7 +103,15 @@ def _variants(inst, gap, stripes):
     return out
 
 
-def _place_all(instances, fabric, gap, stripes, order):
+AIMS = ("length", "width", "compact")
+
+
+def score(aim, length, width):
+    """What a layout minimises: fabric length, width used, or the area of the rectangle around the pieces."""
+    return {"length": (length, width), "width": (width, length), "compact": (length * width, length)}[aim]
+
+
+def _place_all(instances, fabric, gap, stripes, order, aim="length"):
     minx, miny, maxx, maxy = fabric.bounds
     cols, rows = int((maxx - minx) / RES) + 1, int((maxy - miny) / RES) + 1
     blocked = ~_raster(fabric.buffer(-SLACK), rows, cols, -minx, -miny)
@@ -114,7 +122,8 @@ def _place_all(instances, fabric, gap, stripes, order):
         best = None
         # positions lower than the current length plus this piece can only be worse
         tallest = max(v[3].shape[0] for v in inst.variants) if inst.variants else 0
-        grid = blocked[:min(rows, int(used_len / RES) + 2 * tallest + 2)].astype(np.float32)
+        reach = rows if aim == "width" else min(rows, int(used_len / RES) + 2 * tallest + 2)
+        grid = blocked[:reach].astype(np.float32)
         for rot, shape, extras, mask, margin, match_y in inst.variants:
             mh, mw = mask.shape
             if mh > rows or mw > cols:
@@ -148,13 +157,21 @@ def _place_all(instances, fabric, gap, stripes, order):
                     continue
             k1 = np.maximum(used_len, y + h - miny)
             k2 = np.maximum(used_w, x + w - minx)
-            idx = np.lexsort((x, y, k2, k1))[0]
-            key = (k1[idx], k2[idx], y[idx], x[idx])
+            if aim == "length":
+                order_by = (x, y, k2, k1)
+            elif aim == "width":
+                order_by = (y, x, k1, k2)
+            else:
+                order_by = (x, y, k1, k1 * k2)
+            idx = np.lexsort(order_by)[0]
+            key = tuple(a[idx] for a in reversed(order_by))
             if best is None or key < best[0]:
                 best = (key, rot, shape, extras, mask, r[idx], c[idx], x[idx], y[idx])
         if best is None:
             return None
-        (used_len, used_w, _, _), rot, shape, extras, mask, r, c, x, y = best
+        _, rot, shape, extras, mask, r, c, x, y = best
+        used_len = max(used_len, y + shape.bounds[3] - miny)
+        used_w = max(used_w, x + shape.bounds[2] - minx)
         marks, fold_line = (affinity.translate(g, x, y) if g is not None else None for g in extras)
         placements.append(Placement(inst, rot, affinity.translate(shape, x, y), marks, fold_line))
         mh, mw = mask.shape
@@ -162,7 +179,7 @@ def _place_all(instances, fabric, gap, stripes, order):
     return placements, used_len, used_w
 
 
-def nest(instances, fabric, gap=3.0, stripes=None, tries=8, seed=0):
+def nest(instances, fabric, gap=3.0, stripes=None, tries=8, seed=0, aim="length"):
     """Place every instance on the fabric polygon; returns (placements, length, width used)."""
     for inst in instances:
         inst.variants = _variants(inst, gap, stripes)
@@ -175,8 +192,8 @@ def nest(instances, fabric, gap=3.0, stripes=None, tries=8, seed=0):
             for _ in range(max(1, len(order) // 3)):
                 j = rng.randrange(len(order) - 1) if len(order) > 1 else 0
                 order[j:j + 2] = order[j:j + 2][::-1]
-        result = _place_all(instances, fabric, gap, stripes, order)
-        if result and (best is None or result[1:] < best[1:]):
+        result = _place_all(instances, fabric, gap, stripes, order, aim)
+        if result and (best is None or score(aim, *result[1:]) < score(aim, *best[1:])):
             best = result
     if best is None:
         raise ValueError("the pieces do not fit on this fabric")

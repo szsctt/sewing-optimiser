@@ -15,7 +15,7 @@ from shapely import affinity
 from shapely.geometry import JOIN_STYLE, LineString, MultiLineString, Point, box
 from shapely.ops import unary_union
 
-from .nest import Instance, Stripes, nest, rectangle
+from .nest import Instance, Stripes, nest, rectangle, score
 
 FOLD_STEP = 50  # mm between strip widths tried
 
@@ -30,6 +30,7 @@ class FabricSettings:
     stripe_repeat: float | None = None
     stripe_phase: float = 0.0
     tries: int = 8
+    aim: str = "length"  # "length", "width" or "compact": what the layout minimises (see nest.score)
 
 
 @dataclass
@@ -41,6 +42,23 @@ class Layout:
     fabric_shape: object  # as laid out (folded fabric is narrower)
     fold_width: float = 0.0  # > 0: fold this much of the left selvedge over; x = 0 is the fold
     notes: list = field(default_factory=list)
+
+    @property
+    def flat_width(self):
+        """Width of flat fabric used: a folded strip takes twice its width."""
+        return self.width_used + self.fold_width
+
+    @property
+    def compactness(self):
+        """Area of the pieces cut over the rectangle around them (a double layer counts twice)."""
+        cut = sum(p.outline.area * (2 if p.instance.double else 1) for p in self.placements)
+        return cut / (self.length * self.flat_width)
+
+    def score(self, aim):
+        return score(aim, self.length, self.flat_width)
+
+    def describe(self):
+        return f"{self.length:.0f} × {self.flat_width:.0f} mm"
 
     @property
     def utilisation(self):
@@ -166,7 +184,7 @@ def _instances(pieces, s, folding):
 
 def _single_layout(name, single, s, stripes, notes):
     fabric = s.shape if s.shape is not None else rectangle(s.width, pieces=[i.shape for i in single])
-    placements, length, used = nest(single, fabric, s.gap, stripes, s.tries)
+    placements, length, used = nest(single, fabric, s.gap, stripes, s.tries, aim=s.aim)
     shape = s.shape if s.shape is not None else box(0, 0, s.width, length)
     return Layout(name, placements, length, used, shape, 0.0, notes)
 
@@ -177,11 +195,11 @@ def _fold_layout(name, double, single, s, stripes, fold_width, tries):
     length_bound = rectangle(0, pieces=[i.shape for i in double + single]).bounds[3]
     # left of x = 0 is the mirror image, used only by the fold edge's margin
     zone = box(-(s.gap + 10), 0, fold_width, length_bound)
-    placements, length, used = nest(double, zone, s.gap, stripes, tries)
+    placements, length, used = nest(double, zone, s.gap, stripes, tries, aim=s.aim)
     if single:
         if folded_width - fold_width <= 0:
             raise ValueError("no single-layer fabric left")
-        more, l2, u2 = nest(single, box(fold_width, 0, folded_width, length_bound), s.gap, stripes, tries)
+        more, l2, u2 = nest(single, box(fold_width, 0, folded_width, length_bound), s.gap, stripes, tries, aim=s.aim)
         placements, length, used = placements + more, max(length, l2), max(fold_width, u2)
     return Layout(name, placements, length, used, box(0, 0, folded_width, length), fold_width)
 
@@ -203,7 +221,7 @@ def _layout_group(name, group, s, stripes):
             trial = _fold_layout(name, double, single, s, stripes, width, tries=1)
         except ValueError:
             break
-        if best is None or (trial.length, trial.width_used) < (best.length, best.width_used):
+        if best is None or trial.score(s.aim) < best.score(s.aim):
             best = trial
         width += FOLD_STEP
     if best is None:
@@ -211,12 +229,12 @@ def _layout_group(name, group, s, stripes):
         return _single_layout(name, _instances(group, s, False)[1], s, stripes, notes)
     folded = _fold_layout(name, double, single, s, stripes, best.fold_width, s.tries)
     unfolded = _single_layout(name, _instances(group, s, False)[1], s, stripes, notes)
-    if unfolded.length < folded.length:
-        notes.append(f"Unfolded the cut-on-fold pieces: {unfolded.length:.0f} mm of fabric, "
-                     f"against {folded.length:.0f} mm cutting them on a folded strip.")
+    if unfolded.score(s.aim) < folded.score(s.aim):
+        notes.append(f"Unfolded the cut-on-fold pieces: {unfolded.describe()} of fabric, "
+                     f"against {folded.describe()} cutting them on a folded strip.")
         return unfolded
-    folded.notes = notes + [f"Cutting on a folded strip: {folded.length:.0f} mm of fabric, "
-                            f"against {unfolded.length:.0f} mm unfolded."]
+    folded.notes = notes + [f"Cutting on a folded strip: {folded.describe()} of fabric, "
+                            f"against {unfolded.describe()} unfolded."]
     return folded
 
 

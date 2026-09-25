@@ -84,6 +84,8 @@
       <label>Stripe repeat (mm) <input type="number" id="stripe" placeholder="none"></label>
       <label>Stripe offset (mm) <input type="number" id="phase" value="0"></label>
       <label>Tries <input type="number" id="tries" value="8"></label>
+      <label>Aim for <select id="aim"><option value="length">shortest length</option>
+        <option value="width">narrowest width</option><option value="compact">most compact (smallest rectangle)</option></select></label>
     </div>
     <div class="row">
       <span id="shape-status" class="muted">Rectangle of the width above.</span>
@@ -226,7 +228,7 @@ function renderPieces() {
 function fillFabric(f) {
   $('width').value = f.width; $('gap').value = f.gap; $('sa').value = f.seam_allowance;
   $('oneway').checked = f.one_way; $('stripe').value = f.stripe_repeat ?? ''; $('phase').value = f.stripe_phase;
-  $('tries').value = f.tries; fabricShape = f.shape; showShape();
+  $('tries').value = f.tries; $('aim').value = f.aim || 'length'; fabricShape = f.shape; showShape();
 }
 
 function collect() {
@@ -240,7 +242,7 @@ function collect() {
   });
   project.fabric = {width: +$('width').value, gap: +$('gap').value, one_way: $('oneway').checked,
     seam_allowance: +$('sa').value, stripe_repeat: $('stripe').value ? +$('stripe').value : null,
-    stripe_phase: +$('phase').value, tries: +$('tries').value, shape: fabricShape};
+    stripe_phase: +$('phase').value, tries: +$('tries').value, aim: $('aim').value, shape: fabricShape};
   return project;
 }
 
@@ -251,8 +253,9 @@ $('run').onclick = async () => {
     $('result-section').classList.remove('hidden');
     $('layouts').innerHTML = layouts.map((l, i) => `
       <h3>${l.fabric}</h3>
-      <div class="stats">Length used <b>${l.length.toFixed(0)} mm</b>, width used ${l.width_used.toFixed(0)} mm,
-        ${(l.utilisation * 100).toFixed(0)}% of the fabric used is cut into pieces.
+      <div class="stats">Length used <b>${l.length.toFixed(0)} mm</b>, width used <b>${l.flat_width.toFixed(0)} mm</b>.
+        Pieces cover ${(l.utilisation * 100).toFixed(0)}% of the fabric length used and
+        ${(l.compactness * 100).toFixed(0)}% of the rectangle around them.
         ${l.fold_width ? `Fold ${l.fold_width.toFixed(0)} mm of the left selvedge over first.` : ''}
         <a href="/projector?i=${i}" target="_blank">Project this layout</a></div>
       ${l.notes.map(n => `<p class="muted">${n}</p>`).join('')}

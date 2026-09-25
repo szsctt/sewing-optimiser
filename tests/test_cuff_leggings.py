@@ -21,3 +21,13 @@ def test_cuff_leggings_2_3t():
         assert 0 <= a.outline.bounds[0] and a.outline.bounds[2] <= 900
         for b in layout.placements[i + 1:]:
             assert a.outline.distance(b.outline) >= 3 - 1e-6
+
+
+@pytest.mark.skipif(not PDF.exists(), reason="example patterns are not in the repository")
+def test_aims():
+    pieces = extract_pieces(PDF, "2-3t")
+    by_aim = {aim: make_layouts(pieces, FabricSettings(width=1500, aim=aim))[0] for aim in ("length", "width", "compact")}
+    assert by_aim["length"].length <= min(l.length for l in by_aim.values()) + 1
+    assert by_aim["width"].flat_width <= min(l.flat_width for l in by_aim.values()) + 1
+    area = lambda l: l.length * l.flat_width
+    assert area(by_aim["compact"]) <= min(area(l) for l in by_aim.values()) + 1

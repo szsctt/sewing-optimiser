@@ -137,7 +137,8 @@ def layout(project: dict):
     last.update(layouts=layouts, stripes=stripes)
     return [{
         "fabric": l.fabric, "svg": layout_svg(l, stripes), "length": l.length, "width_used": l.width_used,
-        "fold_width": l.fold_width, "utilisation": l.utilisation, "notes": l.notes,
+        "fold_width": l.fold_width, "utilisation": l.utilisation, "compactness": l.compactness, "notes": l.notes,
+        "flat_width": l.flat_width,
     } for l in layouts]
 
 

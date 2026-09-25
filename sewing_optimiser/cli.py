@@ -33,6 +33,8 @@ def main():
                     help="add a rectangle piece, e.g. 'Waistband:305x102:1' (width x length along the grain, mm; copies)")
     ap.add_argument("--lengthen", action="append", default=[], metavar="TEXT:MM@AT",
                     help="lengthen pieces whose name contains TEXT by MM (negative shortens) at AT mm below their top")
+    ap.add_argument("--aim", choices=["length", "width", "compact"], default="length",
+                    help="shortest fabric length (default), narrowest width used, or smallest rectangle around the pieces")
     ap.add_argument("--tries", type=int, default=8, help="piece orders to try; more is slower and may be shorter")
     ap.add_argument("--out", default="layout", help="output path without extension")
     args = ap.parse_args()
@@ -67,7 +69,7 @@ def main():
         print(f"{name}: cut {copies}, {w:.0f} x {l:.0f} mm")
 
     settings = FabricSettings(args.width, gap=args.gap, one_way=args.one_way, seam_allowance=args.seam_allowance,
-                              stripe_repeat=args.stripes, tries=args.tries)
+                              stripe_repeat=args.stripes, tries=args.tries, aim=args.aim)
     layouts = make_layouts(pieces, settings)
     if not layouts:
         ap.exit(1, "No pieces found on this layer. Try another layer, or pick pieces by hand in the app.\n")
@@ -78,8 +80,8 @@ def main():
         svg = out.with_name(f"{out.name}-{layout.fabric}.svg")
         write_svg(svg, layout, stripes)
         fold = f", fold {layout.fold_width:.0f} mm over" if layout.fold_width else ""
-        print(f"{layout.fabric}: length used {layout.length:.0f} mm, width used {layout.width_used:.0f} mm{fold}, "
-              f"utilisation {layout.utilisation:.0%}")
+        print(f"{layout.fabric}: length used {layout.length:.0f} mm, width used {layout.flat_width:.0f} mm{fold}, "
+              f"utilisation {layout.utilisation:.0%}, compactness {layout.compactness:.0%}")
         for note in layout.notes:
             print(note)
     write_pdf(out.with_suffix(".pdf"), layouts, stripes)
