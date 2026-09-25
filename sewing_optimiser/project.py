@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pymupdf
 from shapely.geometry import Polygon, box
-from shapely.ops import unary_union
 
 from .edit import join, mark_on_fold
 from .layout import FabricSettings
-from .pdf_import import JOIN_GAP, Piece, list_sizes, size_key, text_rectangles, _notches, extract_pieces, pieces_from_outlines, sheet_lines, sheet_text, sheets
+from .pdf_import import (Piece, _notches, picked_outlines, extract_pieces, list_sizes, pieces_from_outlines, sheet_lines,
+                         sheet_text, sheets_of, size_key, text_rectangles)
 
 PROJECTS = Path(__file__).parent.parent / "projects"
 PIECE_FIELDS = ("name", "copies", "include", "fabric", "cross_grain", "mirror", "cut_on_fold", "match_y", "grain_deg",
@@ -22,7 +22,8 @@ def default(pdf, size=None):
     return {
         "pdf": str(pdf),
         "size": size,  # PDF layer, or None for every line
-        "picked": None,  # {page: [[[x, y], ...], ...]} outlines picked by hand, mm; None to find them
+        "picked": None,  # {sheet: [[x, y], ...]} regions clicked when picking pieces by hand, mm; None to find them
+        "pick_layers": None,  # the lines shown for picking (a size, with shared layers joined by '|')
         "pieces": [],  # review choices by piece index, keys from PIECE_FIELDS
         "rectangles": [],  # pieces given only by size: {"name", "width", "length", "copies"}, mm
         "joins": None,  # [upper, lower]: pieces drawn in two parts, by index as read; None: guess
@@ -49,14 +50,12 @@ def pieces(project):
     """Pieces read from the PDF with the saved review choices applied."""
     if project.get("picked"):
         doc = pymupdf.open(project["pdf"])
-        all_sheets = sheets(doc)
+        all_sheets = sheets_of(project["pdf"])
         found = []
-        for number, outlines in project["picked"].items():
+        for number, points in project["picked"].items():
             sheet = all_sheets[int(number)]
-            lines, stroke = sheet_lines(doc, sheet, project["size"])
-            # picked regions that touch form one piece; cut inside the drawn line
-            merged = unary_union([Polygon(o).buffer(JOIN_GAP) for o in outlines]).buffer(-JOIN_GAP - stroke / 2)
-            polys = [Polygon(p.exterior) for p in getattr(merged, "geoms", [merged]) if not p.is_empty]
+            lines, stroke = sheet_lines(doc, sheet, project.get("pick_layers") or project["size"])
+            polys = picked_outlines(lines, stroke, points)
             marks = _notches(lines, polys)
             for piece in pieces_from_outlines(sheet_text(doc, sheet), polys, marks):
                 piece.page = int(number)

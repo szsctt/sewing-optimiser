@@ -28,7 +28,7 @@
   .stats { margin: 8px 0; }
   .hidden { display: none; }
   #pick svg, #photo canvas { max-width: 100%; border: 1px solid var(--line); background: #fff; }
-  #pick path { fill: rgba(10,108,255,0.03); stroke: none; cursor: pointer; }
+  #pick path { fill: rgba(10,108,255,0.03); fill-rule: evenodd; stroke: none; cursor: pointer; }
   #pick path:hover { fill: rgba(10,108,255,0.25); }
   #pick path.sel { fill: rgba(10,108,255,0.45); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
@@ -42,12 +42,15 @@
   <label><input type="checkbox" id="byhand"> Pick pieces by hand</label>
   <button id="load" class="primary">Load pieces</button>
   <span id="status" class="muted"></span>
+  <span id="busy" class="muted" hidden>working…</span>
 </header>
 <main>
   <section id="pick" class="hidden">
     <h2>Pick pieces</h2>
     <p class="muted">Click each closed region that is a pattern piece for your size. Click again to deselect.
-      Regions that touch are joined into one piece. For nested sizes, click the ring just inside your size's line.</p>
+      Regions that touch are joined into one piece, with anything they enclose. Where nested sizes share an edge,
+      click every strip from the smallest size out to yours. If the pattern also comes with size layers
+      (for example an A4 file), choosing the size there is quicker.</p>
     <div class="row"><label>Sheet <select id="pickpage"></select></label><button id="pickdone" class="primary">Use picked pieces</button></div>
     <div id="pickview"></div>
   </section>
@@ -103,12 +106,18 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-let project = null, pieces = [], picked = {}, pageFaces = [];
+let project = null, pieces = [], picked = {}, pageFaces = [], pickLayers = '';
 
-async function api(url, body) {
-  const r = await fetch(url, body ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)} : {});
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
-  return r.json();
+let pending = 0;
+async function api(url, body) {  // shows "working…" while any request is out
+  pending++; $('busy').hidden = false; document.body.style.cursor = 'progress';
+  try {
+    const r = await fetch(url, body ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)} : {});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    return await r.json();
+  } finally {
+    if (--pending === 0) { $('busy').hidden = true; document.body.style.cursor = ''; }
+  }
 }
 
 async function init() {
@@ -285,9 +294,10 @@ async function drawPick() {
   const info = await api('/api/info?pdf=' + pdf);
   const {x, y, w, h} = info.pages[page];
   const sel = new Set((picked[page] || []).map(c => JSON.stringify(c)));
+  pickLayers = decodeURIComponent(layers);
   $('pickview').innerHTML = `<svg viewBox="${x} ${y} ${w} ${h}" style="width:100%;max-height:80vh">
     <image href="/api/page.png?pdf=${pdf}&page=${page}&dpi=30" x="${x}" y="${y}" width="${w}" height="${h}"/>
-    ${pageFaces.map((f, i) => `<path data-i="${i}" d="${f.d}" class="${sel.has(JSON.stringify(f.coords)) ? 'sel' : ''}"/>`).join('')}</svg>`;
+    ${pageFaces.map((f, i) => `<path data-i="${i}" d="${f.d}" class="${sel.has(JSON.stringify(f.at)) ? 'sel' : ''}"/>`).join('')}</svg>`;
   $('pickview').querySelectorAll('path').forEach(el => el.onclick = () => el.classList.toggle('sel'));
   $('status').textContent = `${pageFaces.length} regions`;
 }
@@ -298,9 +308,10 @@ function otherLayers() {  // layers that are not sizes, such as a base layer sha
 
 $('pickdone').onclick = async () => {
   const page = $('pickpage').value;
-  const chosen = [...$('pickview').querySelectorAll('path.sel')].map(el => pageFaces[el.dataset.i].coords);
+  const chosen = [...$('pickview').querySelectorAll('path.sel')].map(el => pageFaces[el.dataset.i].at);
   picked[page] = chosen;
   project.picked = picked;
+  project.pick_layers = pickLayers || null;
   await loadPieces();
 };
 

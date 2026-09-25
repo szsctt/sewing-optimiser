@@ -1,6 +1,9 @@
 """Read pattern pieces for one size from a single-page pattern PDF."""
 
+import copy
+import functools
 import math
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -12,7 +15,8 @@ from shapely.ops import polygonize, unary_union
 
 MM_PER_PT = 25.4 / 72
 LABEL_MAX_DIST_MM = 50  # text further than this from every piece is not a piece label
-MIN_PIECE_AREA = 100  # mm²; smaller closed shapes are markings
+FOLD_TEXT_DIST = 10  # mm; a fold label must be inside the piece or this close to it
+MIN_PIECE_AREA = 500  # mm²; smaller closed shapes are markings or size labels
 MIN_FOLD_EDGE = 30  # mm; shortest straight edge accepted as a fold edge
 JOIN_GAP = 1  # mm; faces closer than twice this are halves of one piece
 NOTCH_MAX = 15  # mm; short strokes touching an outline are notches
@@ -20,8 +24,28 @@ GAP_CLOSE = 2  # mm; line ends this close to another line are joined to it
 END_GAP = 5  # mm; loose line ends this close to each other are joined
 # text inside a piece that is not its name
 NOT_NAME = (r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order|square|reference|"
-            r"indicates|length|\.com|^sizes?\b|do not cut|stitch|^[\d\s]+$")
+            r"indicates|length|\.com|^sizes?\b|do not cut|stitch|^[\d\s]+$|line for|version|"
+            r"^(P|PM|NB|\d+-\d+[mt]?|\d+T)$|included in all|allowance|^1/4|\bseam\b|in all pieces")
+NAMED_CUT = re.compile(r"^(.+?)\s*[-–—:]\s*cut\b", re.I)  # 'Right Front - cut 1
 ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
+
+
+def per_file(fn):
+    """Remember fn(path, ...) until the file changes; callers get their own copy of the result."""
+    @functools.lru_cache(maxsize=64)
+    def remembered(path, mtime, *args):
+        return fn(path, *args)
+
+    @functools.wraps(fn)
+    def wrapper(path, *args):
+        return copy.deepcopy(remembered(str(path), os.path.getmtime(path), *args))
+
+    return wrapper
+
+
+@per_file
+def sheets_of(path):
+    return sheets(pymupdf.open(path))
 
 
 @dataclass
@@ -78,6 +102,7 @@ def selector(size):
     return lambda d: d.get("layer") in names
 
 
+@per_file
 def list_sizes(path):
     """(value, label) for each size: the PDF layers, or else the coloured line styles.
 
@@ -344,26 +369,29 @@ def _regions(lines, gap=GAP_CLOSE):
     within END_GAP (lines drawn as separate dashes), or else to the nearest
     line within `gap`.
     """
+    from shapely import STRtree
     from shapely.ops import nearest_points
 
+    tree = STRtree(lines)
     loose = []
     for i, line in enumerate(lines):
         if line.is_closed:
             continue
-        others = [o for j, o in enumerate(lines) if j != i]
         for end in (Point(line.coords[0]), Point(line.coords[-1])):
-            if not any(o.distance(end) <= 1e-6 for o in others):
+            if not any(j != i and lines[j].distance(end) <= 1e-6 for j in tree.query(end.buffer(1e-5))):
                 loose.append((i, end))
+    ends = STRtree([e for _, e in loose])
     bridges, used = [], set()
     for k, (i, end) in enumerate(loose):
-        partners = [(end.distance(e), m) for m, (j, e) in enumerate(loose) if j != i and m != k]
+        partners = [(end.distance(loose[m][1]), m) for m in ends.query(end.buffer(END_GAP))
+                    if loose[m][0] != i and m != k]
         if partners and min(partners)[0] < END_GAP:
             m = min(partners)[1]
             if (m, k) not in used:
                 used.add((k, m))
                 bridges.append(LineString([end, loose[m][1]]))
             continue
-        near = [o for j, o in enumerate(lines) if j != i and o.distance(end) < gap]
+        near = [lines[j] for j in tree.query(end.buffer(gap)) if j != i and lines[j].distance(end) < gap]
         if near:
             hit = nearest_points(min(near, key=end.distance), end)[0]
             # overshoot slightly so the bridge crosses the line and is split there
@@ -377,14 +405,28 @@ def _regions(lines, gap=GAP_CLOSE):
 
 
 def faces(lines):
-    """Every closed region the lines form, as outlines without holes (for picking pieces by hand)."""
+    """Every closed region the lines form, with its holes (for picking pieces by hand)."""
     found, seen = [], set()
     for f in _regions(lines):
         key = tuple(round(v) for v in f.bounds) + (round(f.area),)
         if f.area > MIN_PIECE_AREA and key not in seen:
             seen.add(key)
-            found.append(Polygon(f.exterior))
+            found.append(f)
     return found
+
+
+def picked_outlines(lines, stroke, points):
+    """Outlines of the pieces a person picked by clicking regions (points, mm).
+
+    Clicked regions that touch form one piece, taking in any regions they
+    enclose. Where nested sizes share edges, the regions between size lines
+    are strips that enclose nothing, so each strip from the smallest size
+    out to the chosen one has to be clicked.
+    """
+    regions = faces(lines)
+    chosen = [r for r in regions if any(r.contains(Point(p)) for p in points)]
+    merged = unary_union([r.buffer(JOIN_GAP) for r in chosen]).buffer(-JOIN_GAP - stroke / 2)
+    return [Polygon(g.exterior) for g in getattr(merged, "geoms", [merged]) if not g.is_empty]
 
 
 def _outlines(lines, stroke):
@@ -471,8 +513,8 @@ def pieces_from_outlines(texts, outlines, marks=None):
             continue
         if "grain" in text.lower():
             grain[i] = direction  # the word runs along the grainline arrow
-        if "fold" in text.lower():
-            folds[i].append((centre, direction))
+        if "fold" in text.lower() and dists[i] <= FOLD_TEXT_DIST:
+            folds[i].append((centre, direction, text))
         labels[i].append(text)
         size_list = len(re.findall(r"\b(?:NB|PM|\d+-\d+[mt]?)\b", text)) >= 3
         if dists[i] == 0 and not size_list and not re.search(NOT_NAME, text, re.I):
@@ -483,10 +525,12 @@ def pieces_from_outlines(texts, outlines, marks=None):
         joined = " ".join(texts)
         cut = re.search(r"cut\s*(\d+)(\s*pairs?)?", joined, re.I)
         near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
-        name = " ".join(name_parts or near[:1])
-        name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0][:40].strip() or "piece"  # drop instructions
+        named = [m.group(1) for t in texts if (m := NAMED_CUT.match(t)) and not re.search(NOT_NAME, m.group(1), re.I)]
+        name = named[0] if named else " ".join(name_parts or near[:1])
+        name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0].strip() or "piece"  # drop instructions
         copies = int(cut.group(1)) * (2 if cut.group(2) else 1) if cut else 1
-        unfolded = _unfold(outline, notches, fold_texts, g) if ON_FOLD.search(joined) else None
+        on_fold = any(ON_FOLD.search(t) for _, _, t in fold_texts)
+        unfolded = _unfold(outline, notches, [(c, d) for c, d, _ in fold_texts], g) if on_fold else None
         if unfolded:
             full, both, edge = unfolded
             pieces.append(Piece(name, full, g, copies, half=outline, fold_edge=edge, marks=both, half_marks=notches))
@@ -495,6 +539,7 @@ def pieces_from_outlines(texts, outlines, marks=None):
     return pieces
 
 
+@per_file
 def extract_pieces(path, size_layer=None):
     """Pieces of one size from every sheet. size_layer None takes every stroke (a file per size)."""
     doc = pymupdf.open(path)
@@ -507,10 +552,26 @@ def extract_pieces(path, size_layer=None):
         for piece in pieces_from_outlines(sheet_text(doc, sheet), outlines, _notches(lines, outlines)):
             if _check_square(piece) or any(b.contains(piece.outline) for b in boxes):
                 continue
-            if piece.half is None:
+            if piece.half is None and not list_layers(path):  # layered patterns draw sizes, not folds, dashed
                 piece = _fold_on_dashed_edge(piece, dashed)
             piece.page = number
             pieces.append(piece)
+    return _drop_common_title(pieces)
+
+
+def _drop_common_title(pieces):
+    """Remove the pattern title that starts most piece names ('Fog Tee Sleeve' -> 'Sleeve'), and shorten names."""
+    names = [p.name for p in pieces if p.name != "piece"]
+    title = ""
+    for name in names:
+        words = name.split()
+        for j in range(2, len(words) + 1):  # a title starts the name
+            phrase = " ".join(words[:j])
+            if len(phrase) > len(title) and sum(n.startswith(phrase) for n in names) * 2 > len(names) > 1:
+                title = phrase
+    for p in pieces:
+        shorter = " ".join(p.name.replace(title, " ").split()).strip(" .,:") if title else p.name
+        p.name = (shorter or p.name)[:50]
     return pieces
 
 
@@ -578,6 +639,7 @@ def size_key(name):
     return dict(SIZE_WORDS).get(name, name)
 
 
+@per_file
 def text_rectangles(path):
     """Pieces the instructions give only by size, e.g. 'Waistband ... 12” by 4” for the newborn soaker'.
 

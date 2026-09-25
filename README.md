@@ -27,6 +27,12 @@ A home-made pattern, for example:
 
     pixi run layout "examples/Nappy cover - longies/Large Longies.pdf" --width 1500 --seam-allowance 6 --lengthen "Extend:150@250" --rect "Waistband:432x102:1" --rect "Leg cuff:229x102:2" --out output/longies
 
+## Tests
+
+    pixi run test
+
+The tests use the patterns in `examples/` (not in the repository) and are skipped without them. `tests/test_app.py` drives the web app's API the way the page does.
+
 ## How it works
 
 - **Pieces.** Strokes on the size layer are joined into closed regions; regions that share an edge (mirrored halves, pieces split by internal lines) are merged. Names, "cut N", grainline and fold labels come from the text in and around each piece. Short strokes touching an outline are kept as notches.
@@ -39,6 +45,5 @@ A home-made pattern, for example:
 ## Current limits
 
 - The Make by TFS Fog Tee works from its A0 files; its A4/Letter tiles are clipped at the page edges and are not joined.
-- The Paper Theory Pocket Skirt A4 does not give closed outlines yet.
-- Sizes marked only by line colour on one sheet (Merino leggings, Pocket Skirt A0) need picking by hand.
+- Sizes marked only by dash pattern in black on one sheet (Merino leggings, Pocket Skirt A0) need picking by hand: click every strip from the smallest size out to yours. The Pocket Skirt A4 file has size layers and reads directly.
 - Home-made patterns do not say how many to cut or where the grainline runs; set copies in the review table. The longies A and B parts differ in length by 14 mm at the hem, so check the joined outline.

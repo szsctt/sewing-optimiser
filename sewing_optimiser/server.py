@@ -15,7 +15,7 @@ from . import project as proj
 from .layout import _align, make_layouts
 from .nest import Stripes
 from .output import layout_svg, write_pdf
-from .pdf_import import MM_PER_PT, faces, list_sizes, sheet_lines, sheets
+from .pdf_import import MM_PER_PT, faces, list_sizes, sheet_lines, sheets_of
 
 ROOT = Path(__file__).parent.parent
 EXAMPLES = ROOT / "examples"
@@ -51,12 +51,18 @@ def files():
     return sorted(str(p.relative_to(ROOT)) for p in EXAMPLES.rglob("*.pdf") if "__MACOSX" not in p.parts)
 
 
-def _sheet_doc(doc, sheet):
-    """A one-page PDF with the sheet's tiles placed at their offsets."""
+def _sheet_rects(doc, sheet):
+    """Each tile's rectangle on the sheet, and the sheet's bounds, in points."""
     rects = [pymupdf.Rect(doc[n].rect) + (dx / MM_PER_PT, dy / MM_PER_PT) * 2 for n, dx, dy in sheet]
-    bound = rects[0]
+    bound = pymupdf.Rect(rects[0])
     for r in rects[1:]:
         bound |= r
+    return rects, bound
+
+
+def _sheet_doc(doc, sheet):
+    """A one-page PDF with the sheet's tiles placed at their offsets."""
+    rects, bound = _sheet_rects(doc, sheet)
     out = pymupdf.open()
     page = out.new_page(width=bound.width, height=bound.height)
     for (n, _, _), r in zip(sheet, rects):
@@ -68,8 +74,8 @@ def _sheet_doc(doc, sheet):
 def info(pdf: str):
     doc = pymupdf.open(_pdf(pdf))
     out = []
-    for sheet in sheets(doc):
-        _, bound = _sheet_doc(doc, sheet)
+    for sheet in sheets_of(_pdf(pdf)):
+        _, bound = _sheet_rects(doc, sheet)
         out.append({"x": bound.x0 * MM_PER_PT, "y": bound.y0 * MM_PER_PT,
                     "w": bound.width * MM_PER_PT, "h": bound.height * MM_PER_PT, "pages": [n for n, _, _ in sheet]})
     return {"sizes": list_sizes(_pdf(pdf)), "pages": out}
@@ -83,7 +89,7 @@ def get_project(pdf: str, size: str | None = None):
 @app.get("/api/page.png")
 def page_png(pdf: str, page: int = 0, dpi: int = 12):
     doc = pymupdf.open(_pdf(pdf))
-    sheet_doc, _ = _sheet_doc(doc, sheets(doc)[page])
+    sheet_doc, _ = _sheet_doc(doc, sheets_of(_pdf(pdf))[page])
     pix = sheet_doc[0].get_pixmap(dpi=min(dpi, 50))
     return Response(pix.tobytes("png"), media_type="image/png")
 
@@ -91,9 +97,10 @@ def page_png(pdf: str, page: int = 0, dpi: int = 12):
 @app.get("/api/faces")
 def page_faces(pdf: str, page: int = 0, layers: str = ""):
     doc = pymupdf.open(_pdf(pdf))
-    found = faces(sheet_lines(doc, sheets(doc)[page], layers or None)[0])
-    found.sort(key=lambda f: f.area)  # small first, so they are drawn on top
-    return [{"d": _path_d(f), "coords": [list(c) for c in f.exterior.coords]} for f in found[:2000]]
+    found = faces(sheet_lines(doc, sheets_of(_pdf(pdf))[page], layers or None)[0])
+    # a region between two nested size lines has the inner region as a hole, so each click hits one region
+    found.sort(key=lambda f: -f.area)
+    return [{"d": _path_d(f), "at": list(f.representative_point().coords[0])} for f in found[:2000]]
 
 
 def _abs(project):
