@@ -118,13 +118,26 @@ async function init() {
   loadInfo();
 }
 
+let infoRequest = 0;
 async function loadInfo() {
-  const info = await api('/api/info?pdf=' + encodeURIComponent($('file').value));
-  $('size').innerHTML = info.sizes.map(([v, l]) => `<option value="${v.replace(/"/g, '&quot;')}">${l}</option>`).join('') +
-    '<option value="">(every line)</option>';
-  $('pickpage').innerHTML = info.pages.map((p, i) => `<option value="${i}">${i + 1}${p.pages.length > 1 ? ` (pages ${p.pages[0] + 1}–${p.pages.at(-1) + 1} joined)` : ''}</option>`).join('');
+  const mine = ++infoRequest;  // a slower answer for an earlier file must not overwrite this one
+  ['pick', 'pieces-section', 'fabric-section', 'result-section'].forEach(id => $(id).classList.add('hidden'));
+  $('size').disabled = $('load').disabled = true;
+  $('size').innerHTML = '<option>reading sizes…</option>';
+  $('status').textContent = '';
+  try {
+    const info = await api('/api/info?pdf=' + encodeURIComponent($('file').value));
+    if (mine !== infoRequest) return;
+    $('size').innerHTML = info.sizes.map(([v, l]) => `<option value="${v.replace(/"/g, '&quot;')}">${l}</option>`).join('') +
+      '<option value="">(every line)</option>';
+    $('pickpage').innerHTML = info.pages.map((p, i) => `<option value="${i}">${i + 1}${p.pages.length > 1 ? ` (pages ${p.pages[0] + 1}–${p.pages.at(-1) + 1} joined)` : ''}</option>`).join('');
+    $('size').disabled = $('load').disabled = false;
+  } catch (e) {
+    if (mine === infoRequest) { $('size').innerHTML = ''; $('status').textContent = 'Could not read this PDF: ' + e.message; }
+  }
 }
 
+$('size').onchange = () => ['pick', 'pieces-section', 'fabric-section', 'result-section'].forEach(id => $(id).classList.add('hidden'));
 $('load').onclick = async () => {
   const pdf = $('file').value, size = $('size').value;
   project = await api(`/api/project?pdf=${encodeURIComponent(pdf)}&size=${encodeURIComponent(size)}`);
@@ -136,7 +149,9 @@ $('load').onclick = async () => {
 
 async function loadPieces() {
   $('status').textContent = 'Reading pieces…';
-  ({pieces, joins: project.joins} = await api('/api/pieces', project));
+  try {
+    ({pieces, joins: project.joins} = await api('/api/pieces', project));
+  } catch (e) { $('status').textContent = 'Could not read pieces: ' + e.message; return; }
   $('status').textContent = `${pieces.length} pieces`;
   showRects();
   $('pieces-section').classList.remove('hidden');

@@ -17,6 +17,10 @@ MIN_FOLD_EDGE = 30  # mm; shortest straight edge accepted as a fold edge
 JOIN_GAP = 1  # mm; faces closer than twice this are halves of one piece
 NOTCH_MAX = 15  # mm; short strokes touching an outline are notches
 GAP_CLOSE = 2  # mm; line ends this close to another line are joined to it
+END_GAP = 5  # mm; loose line ends this close to each other are joined
+# text inside a piece that is not its name
+NOT_NAME = (r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order|square|reference|"
+            r"indicates|length|\.com|^sizes?\b|do not cut|stitch|^[\d\s]+$")
 ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
 
 
@@ -334,22 +338,38 @@ def sheet_text(doc, sheet):
 
 
 def _regions(lines, gap=GAP_CLOSE):
-    """Closed regions formed by the lines, after bridging line ends that stop short of another line."""
+    """Closed regions formed by the lines, after bridging gaps.
+
+    A line end that touches nothing is joined to the nearest other loose end
+    within END_GAP (lines drawn as separate dashes), or else to the nearest
+    line within `gap`.
+    """
     from shapely.ops import nearest_points
 
-    bridges = []
+    loose = []
     for i, line in enumerate(lines):
         if line.is_closed:
             continue
         others = [o for j, o in enumerate(lines) if j != i]
         for end in (Point(line.coords[0]), Point(line.coords[-1])):
-            near = [o for o in others if 1e-6 < o.distance(end) < gap]
-            if near and not any(o.distance(end) <= 1e-6 for o in others):
-                hit = nearest_points(min(near, key=end.distance), end)[0]
-                # overshoot slightly so the bridge crosses the line and is split there
-                dx, dy = hit.x - end.x, hit.y - end.y
-                k = 1 + 0.05 / max(end.distance(hit), 1e-9)
-                bridges.append(LineString([end, (end.x + dx * k, end.y + dy * k)]))
+            if not any(o.distance(end) <= 1e-6 for o in others):
+                loose.append((i, end))
+    bridges, used = [], set()
+    for k, (i, end) in enumerate(loose):
+        partners = [(end.distance(e), m) for m, (j, e) in enumerate(loose) if j != i and m != k]
+        if partners and min(partners)[0] < END_GAP:
+            m = min(partners)[1]
+            if (m, k) not in used:
+                used.add((k, m))
+                bridges.append(LineString([end, loose[m][1]]))
+            continue
+        near = [o for j, o in enumerate(lines) if j != i and o.distance(end) < gap]
+        if near:
+            hit = nearest_points(min(near, key=end.distance), end)[0]
+            # overshoot slightly so the bridge crosses the line and is split there
+            dx, dy = hit.x - end.x, hit.y - end.y
+            f = 1 + 0.05 / max(end.distance(hit), 1e-9)
+            bridges.append(LineString([end, (end.x + dx * f, end.y + dy * f)]))
     # grid snap joins near-coincident ends; bridges can also split a region oddly, so keep both results
     plain = list(polygonize(set_precision(unary_union(lines), 0.01)))
     bridged = list(polygonize(unary_union([set_precision(g, 0.01) for g in lines + bridges]))) if bridges else []
@@ -455,17 +475,17 @@ def pieces_from_outlines(texts, outlines, marks=None):
             folds[i].append((centre, direction))
         labels[i].append(text)
         size_list = len(re.findall(r"\b(?:NB|PM|\d+-\d+[mt]?)\b", text)) >= 3
-        if dists[i] == 0 and not size_list and not re.search(r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order|square", text, re.I):
+        if dists[i] == 0 and not size_list and not re.search(NOT_NAME, text, re.I):
             names[i].append(text)
 
     pieces = []
     for outline, notches, texts, name_parts, g, fold_texts in zip(outlines, marks, labels, names, grain, folds):
         joined = " ".join(texts)
-        cut = re.search(r"cut\s*(\d+)", joined, re.I)
+        cut = re.search(r"cut\s*(\d+)(\s*pairs?)?", joined, re.I)
         near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
         name = " ".join(name_parts or near[:1])
         name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0][:40].strip() or "piece"  # drop instructions
-        copies = int(cut.group(1)) if cut else 1
+        copies = int(cut.group(1)) * (2 if cut.group(2) else 1) if cut else 1
         unfolded = _unfold(outline, notches, fold_texts, g) if ON_FOLD.search(joined) else None
         if unfolded:
             full, both, edge = unfolded

@@ -31,13 +31,14 @@ A home-made pattern, for example:
 
 - **Pieces.** Strokes on the size layer are joined into closed regions; regions that share an edge (mirrored halves, pieces split by internal lines) are merged. Names, "cut N", grainline and fold labels come from the text in and around each piece. Short strokes touching an outline are kept as notches.
 - **Tiled files.** A4/Letter pages are joined into one sheet by matching paths that run off one page and continue on another; blank tiles are placed from the page grid. Consecutive pages that each carry the same coloured dotted "tape here" line are joined along it.
-- **Small gaps.** Line ends that stop up to 2 mm short of another line are joined to it.
+- **Small gaps.** Loose line ends up to 5 mm apart are joined to each other (outlines drawn as separate dashes), and ends that stop up to 2 mm short of another line are joined to it.
 - **Cut on fold.** Half pieces are mirrored across their fold edge. The layout also tries cutting them on a folded strip along the left selvedge (with mirrored pairs cut through both layers) and keeps whichever uses less fabric.
 - **Nesting.** Pieces are turned so the grainline runs along the length (0°/180°, plus 90°/270° for cross-grain pieces) and placed largest first at the lowest free position, found on a 2 mm grid for all positions at once. Several piece orders are tried. The final layout is checked on the exact shapes for the gap and the fabric edge.
 - **Stripes.** Pieces with a match line are placed only where that line falls on a stripe.
 
 ## Current limits
 
-- Makers that draw the edges shared by every size on a separate base layer (Make by TFS Fog Tee, Paper Theory Pocket Skirt A4) do not give closed outlines yet.
+- The Make by TFS Fog Tee works from its A0 files; its A4/Letter tiles are clipped at the page edges and are not joined.
+- The Paper Theory Pocket Skirt A4 does not give closed outlines yet.
 - Sizes marked only by line colour on one sheet (Merino leggings, Pocket Skirt A0) need picking by hand.
 - Home-made patterns do not say how many to cut or where the grainline runs; set copies in the review table. The longies A and B parts differ in length by 14 mm at the hem, so check the joined outline.
