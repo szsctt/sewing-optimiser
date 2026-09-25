@@ -192,9 +192,11 @@ def nest(instances, fabric, gap=3.0, stripes=None, tries=8, seed=0, aim="length"
             for _ in range(max(1, len(order) // 3)):
                 j = rng.randrange(len(order) - 1) if len(order) > 1 else 0
                 order[j:j + 2] = order[j:j + 2][::-1]
-        result = _place_all(instances, fabric, gap, stripes, order, aim)
-        if result and (best is None or score(aim, *result[1:]) < score(aim, *best[1:])):
-            best = result
+        # the smallest rectangle can come from packing for length or for width as well
+        for how in AIMS if aim == "compact" else (aim,):
+            result = _place_all(instances, fabric, gap, stripes, order, how)
+            if result and (best is None or score(aim, *result[1:]) < score(aim, *best[1:])):
+                best = result
     if best is None:
         raise ValueError("the pieces do not fit on this fabric")
     check(best[0], fabric, gap)
