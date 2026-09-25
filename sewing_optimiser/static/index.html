@@ -22,7 +22,7 @@
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { font-weight: 600; color: var(--muted); font-size: 12px; }
   td input[type=text] { width: 100%; min-width: 120px; }
-  .thumb { width: 90px; height: 90px; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
+  .thumb { overflow: visible; width: 90px; height: 90px; background: #fff; border: 1px solid var(--line); cursor: crosshair; }
   .muted { color: var(--muted); }
   .layouts svg { width: 100%; height: auto; background: #fff; border: 1px solid var(--line); }
   .stats { margin: 8px 0; }
@@ -59,7 +59,10 @@
     <h2>Pieces</h2>
     <p class="muted">Untick option pieces you are not making. Pictures are turned so the grainline runs down the page.</p>
     <div class="row"><label>Clicking a picture sets the
-      <select id="clickmode"><option value="match_y">stripe match line (red)</option><option value="lengthen_at">lengthen/shorten line (blue)</option></select></label></div>
+      <select id="clickmode"><option value="match_y">stripe match line (red)</option><option value="lengthen_at">lengthen/shorten line (blue)</option>
+        <option value="trim">option part to leave off or put back (dashed)</option></select></label></div>
+    <p class="muted">Lines inside a piece, such as "cut at the shorter line for cuffs", split it into parts, shown dashed.
+      To cut a shorter or narrower option, leave its extra part off.</p>
     <table><thead><tr><th>Use</th><th>Piece</th><th>Name</th><th>Copies</th><th>Fabric</th><th>Grainline</th>
       <th>Cross-grain</th><th>Mirror pairs</th><th>On fold</th><th>Join with</th><th>Match line (mm)</th><th>Lengthen by (mm)</th><th>at (mm)</th></tr></thead>
       <tbody id="pieces"></tbody></table>
@@ -175,11 +178,13 @@ function renderPieces() {
     const s = 80 / Math.max(p.w, p.h);
     const line = (y, colour) => y == null ? '' : `<line x1="0" x2="${p.w}" y1="${y}" y2="${y}" stroke="${colour}" stroke-width="${1.5 / s}"/>`;
     const match = line(p.match_y, '#e33') + line(p.lengthen_at, '#06f');
+    const parts = (p.parts || []).map((part, k) => `<path data-part="${k}" d="${part.d}" stroke="#06f" stroke-dasharray="${3 / s} ${2 / s}"
+      stroke-width="${1 / s}" fill="${p.trim.includes(k) ? 'rgba(200,0,0,0.25)' : 'transparent'}"><title>${part.label || 'part ' + (k + 1)}</title></path>`).join('');
     return `<tr>
       <td><input type="checkbox" data-i="${i}" data-k="include" ${p.include ? 'checked' : ''}></td>
       <td><svg class="thumb" data-i="${i}" viewBox="${-5 / s} ${-5 / s} ${90 / s} ${90 / s}">
         <path d="${p.d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>
-        <line x1="${p.w / 2}" x2="${p.w / 2}" y1="${p.h * 0.2}" y2="${p.h * 0.8}" stroke="#999" stroke-width="${1 / s}"/>${match}</svg></td>
+        <line x1="${p.w / 2}" x2="${p.w / 2}" y1="${p.h * 0.2}" y2="${p.h * 0.8}" stroke="#999" stroke-width="${1 / s}"/>${match}${parts}</svg></td>
       <td><input type="text" data-i="${i}" data-k="name" value="${p.name.replace(/"/g, '&quot;')}"></td>
       <td><input type="number" min="0" data-i="${i}" data-k="copies" value="${p.copies}"></td>
       <td><input type="text" style="min-width:70px;width:80px" data-i="${i}" data-k="fabric" value="${p.fabric}"></td>
@@ -216,8 +221,15 @@ function renderPieces() {
     if (sel.value !== '') project.joins.push([upper, +sel.value]);
     project.pieces = []; await loadPieces();
   });
-  $('pieces').querySelectorAll('svg.thumb').forEach(svg => svg.onclick = ev => {
+  $('pieces').querySelectorAll('svg.thumb').forEach(svg => svg.onclick = async ev => {
     const p = pieces[svg.dataset.i], pt = svg.createSVGPoint();
+    if ($('clickmode').value === 'trim') {
+      const part = ev.target.dataset.part;
+      if (part === undefined) return;
+      p.trim = p.trim.includes(+part) ? p.trim.filter(k => k !== +part) : [...p.trim, +part];
+      collect(); await loadPieces();
+      return;
+    }
     pt.x = ev.clientX; pt.y = ev.clientY;
     const q = pt.matrixTransform(svg.getScreenCTM().inverse());
     p[$('clickmode').value] = Math.max(0, Math.min(p.h, Math.round(q.y)));
@@ -235,7 +247,7 @@ function collect() {
   project.pieces = pieces.map((p, i) => {
     const c = {name: p.name, copies: p.copies, include: p.include, fabric: p.fabric || 'main', cross_grain: p.cross_grain,
                mirror: p.mirror, cut_on_fold: p.cut_on_fold, match_y: p.match_y,
-               lengthen: p.lengthen || 0, lengthen_at: p.lengthen_at};
+               lengthen: p.lengthen || 0, lengthen_at: p.lengthen_at, trim: p.trim || []};
     if (p.grain_override != null) c.grain_deg = p.grain_override;
     if (p.on_fold_mark || (project.pieces[i] || {}).on_fold) c.on_fold = true;
     return c;

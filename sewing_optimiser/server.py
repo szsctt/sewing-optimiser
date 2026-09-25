@@ -115,12 +115,16 @@ def get_pieces(project: dict):
         aligned = _align(p.outline, p.grain_deg)
         minx, miny, maxx, maxy = aligned.bounds
         aligned = affinity.translate(aligned, -minx, -miny)
+        # parts are drawn over the picture so they can be clicked off or back on
+        parts = [{"d": _path_d(affinity.translate(_align(r, p.grain_deg), -minx, -miny)), "label": label}
+                 for r, label in zip(p.regions, p.region_labels)]
         out.append({
             "index": i, "name": p.name, "copies": p.copies, "include": p.include, "fabric": p.fabric,
             "cross_grain": p.cross_grain, "mirror": p.mirror, "cut_on_fold": p.cut_on_fold,
             "match_y": p.match_y, "grain_deg": p.grain_deg, "on_fold": p.half is not None, "page": p.page,
             "lengthen": p.lengthen, "lengthen_at": p.lengthen_at, "source": p.source,
-            "d": _path_d(aligned), "w": maxx - minx, "h": maxy - miny,
+            "d": _path_d(aligned), "w": maxx - minx, "h": maxy - miny, "parts": parts,
+            "trim": getattr(p, "trimmed", []),
         })
     return {"pieces": out, "joins": full["joins"]}
 

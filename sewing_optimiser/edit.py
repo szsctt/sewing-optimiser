@@ -82,3 +82,19 @@ def join(upper, lower):
     full, both = _unfold(shape, marks, edge)
     return replace(upper, name=name, outline=full, marks=both, grain_deg=90.0, half=shape, half_marks=marks,
                    fold_edge=edge)
+
+
+def trim(piece, indices):
+    """The piece without the parts listed (by index into piece.regions): the cutting options not taken."""
+    drop = [piece.regions[i] for i in indices if i < len(piece.regions)]
+    if not drop:
+        return piece
+    gone = unary_union(drop).buffer(0.5)
+    base = piece.half if piece.half is not None else piece.outline
+    kept = base.difference(gone)
+    kept = max(getattr(kept, "geoms", [kept]), key=lambda g: g.area)
+    marks = lambda m: MultiLineString([l for l in m.geoms if not gone.contains(l.centroid)])
+    if piece.half is None:
+        return replace(piece, outline=kept, marks=marks(piece.marks))
+    full, both = _unfold(kept, marks(piece.half_marks), piece.fold_edge)
+    return replace(piece, outline=full, marks=both, half=kept, half_marks=marks(piece.half_marks))

@@ -70,6 +70,8 @@ class Piece:
     source: int | None = None  # index among the pieces read from the PDF
     marks: MultiLineString = field(default_factory=MultiLineString)  # notches, same coordinates as outline
     half_marks: MultiLineString = field(default_factory=MultiLineString)  # notches of `half`
+    regions: list = field(default_factory=list)  # parts that option lines split the drawn piece into, page mm
+    region_labels: list = field(default_factory=list)  # text inside each part, e.g. 'Cut at the longer line for footies'
 
     @property
     def unfolded(self):
@@ -573,16 +575,31 @@ def extract_pieces(path, size_layer=None):
     for number, sheet in enumerate(sheets(doc)):
         lines, stroke = sheet_lines(doc, sheet, size_layer)
         outlines = _outlines(lines, stroke)
+        parts = faces(lines)
+        texts = sheet_text(doc, sheet)
         boxes = _shaded_boxes(doc, sheet)
         dashed = _dashed_lines(doc, sheet)
-        for piece in pieces_from_outlines(sheet_text(doc, sheet), outlines, _notches(lines, outlines)):
+        for piece in pieces_from_outlines(texts, outlines, _notches(lines, outlines)):
             if _check_square(piece) or any(b.contains(piece.outline) for b in boxes):
                 continue
             if piece.half is None and not list_layers(path):  # layered patterns draw sizes, not folds, dashed
                 piece = _fold_on_dashed_edge(piece, dashed)
             piece.page = number
+            _option_regions(piece, parts, texts)
             pieces.append(piece)
     return _drop_common_title(pieces)
+
+
+def _option_regions(piece, parts, texts):
+    """Record the parts a piece is split into by lines inside it (cutting options), with their labels."""
+    drawn = (piece.half if piece.half is not None else piece.outline).buffer(1)
+    inside = [r for r in parts if drawn.contains(r.representative_point()) and r.area < 0.98 * drawn.area]
+    if len(inside) < 2:
+        return
+    piece.regions = inside
+    for r in inside:
+        words = [t for t, c, _ in texts if r.contains(c) and not re.match(r"^(P|PM|NB|\d+-\d+[mt]?|\d+T)$", t)]
+        piece.region_labels.append(" ".join(words)[:60])
 
 
 def _drop_common_title(pieces):

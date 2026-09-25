@@ -42,3 +42,17 @@ def test_xl_soaker_is_three_pieces():
         ("Front of the soaker + Back of the soaker", 1), ("Waistband", 1), ("Leg Cuffs", 2)]
     assert found[0].half is not None  # the body is cut on the fold
     assert found[1].outline.bounds[2] == pytest.approx(19.5 * 25.4)  # 19.5" by 4" for the XL
+
+
+SLEEPER = NAPPY / "Sleep onesie/LK Snap Sleeper Pattern Size A0.pdf"
+
+
+@pytest.mark.skipif(not SLEEPER.exists(), reason="example patterns are not in the repository")
+def test_option_part_left_off():
+    from sewing_optimiser.edit import trim
+
+    back = next(p for p in extract_pieces(SLEEPER, "2T") if p.name == "Back")
+    assert len(back.regions) >= 2  # the leg below the cuff line is a separate part
+    smallest = min(range(len(back.regions)), key=lambda i: back.regions[i].area)
+    shorter = trim(back, [smallest])
+    assert shorter.half is not None and shorter.outline.area < back.outline.area

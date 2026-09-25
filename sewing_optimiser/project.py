@@ -8,14 +8,15 @@ from pathlib import Path
 import pymupdf
 from shapely.geometry import Polygon, box
 
-from .edit import join, mark_on_fold
+from .edit import join, mark_on_fold, trim
 from .layout import FabricSettings
 from .pdf_import import (Piece, _notches, picked_outlines, extract_pieces, list_sizes, pieces_from_outlines, sheet_lines,
                          sheet_text, sheets_of, size_key, text_rectangles)
 
 PROJECTS = Path(__file__).parent.parent / "projects"
 PIECE_FIELDS = ("name", "copies", "include", "fabric", "cross_grain", "mirror", "cut_on_fold", "match_y", "grain_deg",
-                "lengthen", "lengthen_at")  # choices by index in the final list; "on_fold" marks a piece as a half on the fold
+                "lengthen", "lengthen_at")  # choices by index in the final list; "on_fold" marks a piece as a half on the fold,
+# "trim" lists the parts (piece.regions) left off
 
 
 def default(pdf, size=None):
@@ -82,6 +83,9 @@ def pieces(project):
     for r in project.get("rectangles", []):  # length runs along the grain
         found.append(Piece(r["name"], box(0, 0, r["width"], r["length"]), 90.0, r.get("copies", 1)))
     for i, choices in enumerate(project["pieces"][:len(found)]):
+        if choices.get("trim"):
+            found[i] = trim(found[i], choices["trim"])
+            found[i].trimmed = choices["trim"]
         if choices.get("on_fold"):
             found[i] = mark_on_fold(found[i])
         for key in PIECE_FIELDS:
