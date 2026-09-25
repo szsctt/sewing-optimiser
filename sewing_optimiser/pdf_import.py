@@ -2,11 +2,11 @@
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pymupdf
 from shapely import affinity, set_precision
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
 MM_PER_PT = 25.4 / 72
@@ -14,6 +14,7 @@ LABEL_MAX_DIST_MM = 50  # text further than this from every piece is not a piece
 MIN_PIECE_AREA = 100  # mm²; smaller closed shapes are markings
 MIN_FOLD_EDGE = 30  # mm; shortest straight edge accepted as a fold edge
 JOIN_GAP = 1  # mm; faces closer than twice this are halves of one piece
+NOTCH_MAX = 15  # mm; short strokes touching an outline are notches
 ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
 
 
@@ -32,6 +33,9 @@ class Piece:
     mirror: bool = True  # every second copy is mirrored (left/right pairs)
     cut_on_fold: bool = True  # for pieces with a half: cut on a folded strip, else unfolded
     match_y: float | None = None  # stripe match line, mm below the top of the grain-aligned piece
+    page: int = 0
+    marks: MultiLineString = field(default_factory=MultiLineString)  # notches, same coordinates as outline
+    half_marks: MultiLineString = field(default_factory=MultiLineString)  # notches of `half`
 
     @property
     def unfolded(self):
@@ -76,21 +80,34 @@ def _polylines(items):
     return [line for line in lines if len(line) > 1]
 
 
-def _outlines(page, layer):
-    """Piece outlines on the given layer, inset to the inside of the stroke.
+def _linework(page, layers):
+    """Stroked lines on the given layers (None: every stroke) and the widest stroke, mm."""
+    lines, stroke = [], 0.0
+    for d in page.get_drawings():
+        if "s" in d["type"] and (layers is None or d.get("layer") in layers):
+            lines += [LineString(pl) for pl in _polylines(d["items"])]
+            stroke = max(stroke, (d.get("width") or 0) * MM_PER_PT)
+    return lines, stroke
+
+
+def faces(page, layers=None):
+    """Every closed region the strokes form, as outlines without holes (for picking pieces by hand)."""
+    lines, _ = _linework(page, layers)
+    found = polygonize(set_precision(unary_union(lines), 0.01))
+    return [Polygon(f.exterior) for f in found if f.area > MIN_PIECE_AREA]
+
+
+def _outlines(page, layers):
+    """Piece outlines on the given layers, inset to the inside of the stroke.
 
     Outlines may be drawn as several open paths, as rectangles, or as two
     mirrored halves that share an edge. All strokes are joined, split into
     closed faces, and faces that share an edge (or nearly do) are merged into
     one piece.
     """
-    lines, stroke = [], 0.0
-    for d in page.get_drawings():
-        if d.get("layer") == layer and "s" in d["type"]:
-            lines += [LineString(pl) for pl in _polylines(d["items"])]
-            stroke = max(stroke, (d.get("width") or 0) * MM_PER_PT)
-    faces = polygonize(set_precision(unary_union(lines), 0.01))  # grid snap joins near-coincident ends
-    merged = unary_union([f.buffer(JOIN_GAP) for f in faces]).buffer(-JOIN_GAP)
+    lines, stroke = _linework(page, layers)
+    found = polygonize(set_precision(unary_union(lines), 0.01))  # grid snap joins near-coincident ends
+    merged = unary_union([f.buffer(JOIN_GAP) for f in found]).buffer(-JOIN_GAP)
     parts = getattr(merged, "geoms", [merged])
     return [Polygon(p.exterior).buffer(-stroke / 2) for p in parts if p.area > MIN_PIECE_AREA]
 
@@ -106,7 +123,7 @@ def _reflect(geom, a, b):
     return affinity.affine_transform(geom, m + [xoff, yoff])
 
 
-def _unfold(outline, fold_texts, grain_deg):
+def _unfold(outline, marks, fold_texts, grain_deg):
     """Mirror a half piece across its fold edge.
 
     The fold edge is the long straight edge, parallel to a fold label or to
@@ -129,16 +146,31 @@ def _unfold(outline, fold_texts, grain_deg):
         return None
     _, a, b = best
     full = unary_union([outline, _reflect(outline, a, b)]).buffer(0.01).buffer(-0.01)
-    return (full, (a, b)) if full.geom_type == "Polygon" else None
+    if full.geom_type != "Polygon":
+        return None
+    both = MultiLineString(list(marks.geoms) + list(_reflect(marks, a, b).geoms)) if not marks.is_empty else marks
+    return full, both, (a, b)
 
 
-def extract_pieces(path, size_layer):
-    page = pymupdf.open(path)[0]
-    outlines = _outlines(page, size_layer)
+def _notches(lines, outlines):
+    """Short strokes touching each outline."""
+    marks = [[] for _ in outlines]
+    for line in lines:
+        if line.length > NOTCH_MAX:
+            continue
+        dists = [o.exterior.distance(line) for o in outlines]
+        if dists and min(dists) < 2:
+            marks[dists.index(min(dists))].append(line)
+    return [MultiLineString(m) for m in marks]
+
+
+def pieces_from_outlines(page, outlines, marks=None):
+    """Attach names, cut counts, grainlines and fold edges from the page text to outlines (mm)."""
+    marks = marks or [MultiLineString() for _ in outlines]
     labels = [[] for _ in outlines]
+    names = [[] for _ in outlines]
     grain = [None] * len(outlines)
     folds = [[] for _ in outlines]
-
     for block in page.get_text("dict")["blocks"]:
         for line in block.get("lines", []):
             text = "".join(s["text"] for s in line["spans"]).strip()
@@ -156,17 +188,34 @@ def extract_pieces(path, size_layer):
             if "fold" in text.lower():
                 folds[i].append((centre, direction))
             labels[i].append(text)
+            if dists[i] == 0 and not re.search(r"^cut\b|grain|fold|seam\s+allowance|pattern|notch", text, re.I):
+                names[i].append(text)
 
     pieces = []
-    for outline, texts, g, fold_texts in zip(outlines, labels, grain, folds):
+    for outline, notches, texts, name_parts, g, fold_texts in zip(outlines, marks, labels, names, grain, folds):
         joined = " ".join(texts)
         cut = re.search(r"cut\s*(\d+)", joined, re.I)
-        name = " ".join(t for t in texts if not re.search(r"^cut\b|grain|fold", t, re.I)) or "piece"
+        name = " ".join(name_parts)[:40].strip() or "piece"
         copies = int(cut.group(1)) if cut else 1
-        unfolded = _unfold(outline, fold_texts, g) if ON_FOLD.search(joined) else None
+        unfolded = _unfold(outline, notches, fold_texts, g) if ON_FOLD.search(joined) else None
         if unfolded:
-            full, edge = unfolded
-            pieces.append(Piece(name, full, g, copies, half=outline, fold_edge=edge))
+            full, both, edge = unfolded
+            pieces.append(Piece(name, full, g, copies, half=outline, fold_edge=edge, marks=both, half_marks=notches))
         else:
-            pieces.append(Piece(name, outline, g, copies))
+            pieces.append(Piece(name, outline, g, copies, marks=notches))
+    return pieces
+
+
+def extract_pieces(path, size_layer=None, pages=None):
+    """Pieces of one size. size_layer None takes every stroke (a file per size)."""
+    doc = pymupdf.open(path)
+    pieces = []
+    for number in pages if pages is not None else range(doc.page_count):
+        page = doc[number]
+        layers = None if size_layer is None else {size_layer}
+        outlines = _outlines(page, layers)
+        marks = _notches(_linework(page, layers)[0], outlines)
+        for piece in pieces_from_outlines(page, outlines, marks):
+            piece.page = number
+            pieces.append(piece)
     return pieces

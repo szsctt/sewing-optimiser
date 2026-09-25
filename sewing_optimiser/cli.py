@@ -16,7 +16,7 @@ def _matches(piece, texts):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pdf")
-    ap.add_argument("--size", help="PDF layer holding the chosen size; omit to list layers")
+    ap.add_argument("--size", help="PDF layer holding the chosen size; omit to list layers (files without layers use every line)")
     ap.add_argument("--width", type=float, help="fabric width in mm, selvedge to selvedge")
     ap.add_argument("--gap", type=float, default=3.0, help="minimum gap between pieces, mm")
     ap.add_argument("--one-way", action="store_true", help="napped or one-way fabric: no 180° turns")
@@ -31,13 +31,14 @@ def main():
     ap.add_argument("--out", default="layout", help="output path without extension")
     args = ap.parse_args()
 
-    if not args.size:
-        print("\n".join(list_layers(args.pdf)))
+    layers = list_layers(args.pdf)
+    if not args.size and layers:
+        print("\n".join(layers))
         return
     if not args.width:
         ap.error("--width is required with --size")
 
-    pieces = extract_pieces(args.pdf, args.size)
+    pieces = extract_pieces(args.pdf, args.size or None)
     for p in pieces:
         p.include = not _matches(p, args.skip)
         p.cross_grain = _matches(p, args.cross_grain)

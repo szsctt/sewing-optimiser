@@ -67,15 +67,17 @@ def _grow(poly, sa):
 
 
 def _fold_half(piece, sa):
-    """The half piece, aligned, with its fold edge on x = 0 and the piece to the right; None if not possible."""
+    """(half piece, notches) aligned, with the fold edge on x = 0 and the piece to the right; None if not possible."""
     half = _align(piece.half, piece.grain_deg)
+    marks = _align(piece.half_marks, piece.grain_deg)
     a, b = [_align(Point(p), piece.grain_deg) for p in piece.fold_edge]
     if abs(a.x - b.x) > 1.0:
         return None  # fold edge not parallel to the grainline
     if half.centroid.x < a.x:
         half = affinity.scale(half, -1, 1, origin=(a.x, 0))
+        marks = affinity.scale(marks, -1, 1, origin=(a.x, 0))
     grown = _grow(half, sa).intersection(box(a.x, -1e9, 1e9, 1e9))  # no allowance on the fold
-    return affinity.translate(grown, -a.x, 0)
+    return affinity.translate(grown, -a.x, 0), affinity.translate(marks, -a.x, 0)
 
 
 def _instances(pieces, s, folding):
@@ -84,24 +86,28 @@ def _instances(pieces, s, folding):
     for piece in pieces:
         rots = _rotations(piece, s.one_way)
         full = _grow(_align(piece.outline, piece.grain_deg), s.seam_allowance)
+        marks = _align(piece.marks, piece.grain_deg)
         match_y = piece.match_y + s.seam_allowance if s.stripe_repeat and piece.match_y is not None else None
         half = _fold_half(piece, s.seam_allowance) if folding and piece.half is not None and piece.cut_on_fold else None
         if half is not None:
             for copy in range(1, piece.copies + 1):
-                double.append(Instance(f"{piece.name} {copy}/{piece.copies} (on fold)", half, rots, match_y,
-                                       fold=True, double=True))
+                double.append(Instance(f"{piece.name} {copy}/{piece.copies} (on fold)", half[0], rots, match_y,
+                                       fold=True, double=True, marks=half[1]))
             continue
         copy = 1
         if folding and piece.mirror:
             while copy + 1 <= piece.copies:  # a mirrored pair cut through both layers
                 double.append(Instance(f"{piece.name} {copy}+{copy + 1}/{piece.copies} (both layers)", full, rots,
-                                       match_y, double=True, min_x=0.0))
+                                       match_y, double=True, min_x=0.0, marks=marks))
                 copy += 2
         for c in range(copy, piece.copies + 1):
             mirrored = piece.mirror and c % 2 == 0
-            shape = affinity.scale(full, -1, 1, origin="centroid") if mirrored else full
+            shape, m = full, marks
+            if mirrored:
+                centre = full.centroid
+                shape, m = (affinity.scale(g, -1, 1, origin=centre) for g in (full, marks))
             single.append(Instance(f"{piece.name} {c}/{piece.copies}" + (" (mirrored)" if mirrored else ""),
-                                   shape, rots, match_y))
+                                   shape, rots, match_y, marks=m))
     return double, single
 
 

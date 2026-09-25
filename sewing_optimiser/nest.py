@@ -35,6 +35,7 @@ class Instance:
     fold: bool = False  # half piece whose fold edge (the left side) sits on the fabric fold
     double: bool = False  # cut through two layers of folded fabric
     min_x: float | None = None  # leftmost allowed x (keeps double-layer pieces off the mirror side)
+    marks: object = None  # notches, moved with the piece
     data: dict = field(default_factory=dict)  # passed through to the placement
 
 
@@ -43,6 +44,7 @@ class Placement:
     instance: Instance
     rotation: int
     outline: object  # shapely Polygon in fabric coordinates (mm)
+    marks: object = None  # notches in fabric coordinates
 
 
 @dataclass
@@ -51,9 +53,17 @@ class Stripes:
     phase: float = 0.0  # y of a reference stripe, mm
 
 
-def _to_origin(poly):
-    minx, miny, _, _ = poly.bounds
-    return affinity.translate(poly, -minx, -miny)
+def _turn(inst, rot):
+    """(shape, marks) turned by rot and moved so the shape's bounding box starts at (0, 0)."""
+    geoms = [inst.shape] + ([inst.marks] if inst.marks is not None else [])
+    if inst.fold and rot == 180:
+        geoms = [affinity.scale(g, 1, -1, origin=(0, 0)) for g in geoms]  # turned and mirrored: fold edge stays left
+    else:
+        centre = inst.shape.centroid
+        geoms = [affinity.rotate(g, rot, origin=centre) for g in geoms]
+    minx, miny, _, _ = geoms[0].bounds
+    geoms = [affinity.translate(g, -minx, -miny) for g in geoms]
+    return geoms[0], (geoms[1] if len(geoms) > 1 else None)
 
 
 def _raster(geom, rows, cols, dx=0.0, dy=0.0):
@@ -69,15 +79,12 @@ def _raster(geom, rows, cols, dx=0.0, dy=0.0):
 
 
 def _variants(inst, gap, stripes):
-    """(rotation, shape at origin, grid mask, margin, match_y) for each allowed turn."""
+    """(rotation, shape at origin, marks, grid mask, margin, match_y) for each allowed turn."""
     out = []
     for rot in inst.rotations:
         if inst.fold and rot in (90, 270):
             continue  # the fold edge must stay along the length
-        if inst.fold and rot == 180:
-            shape = _to_origin(affinity.scale(inst.shape, 1, -1))  # turned and mirrored: fold edge stays left
-        else:
-            shape = _to_origin(affinity.rotate(inst.shape, rot, origin="centroid"))
+        shape, marks = _turn(inst, rot)
         _, _, w, h = shape.bounds
         match_y = None
         if inst.match_y is not None:
@@ -88,7 +95,7 @@ def _variants(inst, gap, stripes):
         margin = gap / 2 + SLACK + (RES if snapped else 0)
         grown = shape.buffer(margin)
         rows, cols = int(np.ceil((h + 2 * margin) / RES)) + 1, int(np.ceil((w + 2 * margin) / RES)) + 1
-        out.append((rot, shape, _raster(grown, rows, cols, margin, margin), margin, match_y))
+        out.append((rot, shape, marks, _raster(grown, rows, cols, margin, margin), margin, match_y))
     return out
 
 
@@ -101,7 +108,7 @@ def _place_all(instances, fabric, gap, stripes, order):
     for i in order:
         inst = instances[i]
         best = None
-        for rot, shape, mask, margin, match_y in inst.variants:
+        for rot, shape, marks, mask, margin, match_y in inst.variants:
             mh, mw = mask.shape
             if mh > rows or mw > cols:
                 continue
@@ -139,11 +146,12 @@ def _place_all(instances, fabric, gap, stripes, order):
             idx = np.lexsort((x, y, k2, k1))[0]
             key = (k1[idx], k2[idx], y[idx], x[idx])
             if best is None or key < best[0]:
-                best = (key, rot, shape, mask, r[idx], c[idx], x[idx], y[idx])
+                best = (key, rot, shape, marks, mask, r[idx], c[idx], x[idx], y[idx])
         if best is None:
             return None
-        (used_len, used_w, _, _), rot, shape, mask, r, c, x, y = best
-        placements.append(Placement(inst, rot, affinity.translate(shape, x, y)))
+        (used_len, used_w, _, _), rot, shape, marks, mask, r, c, x, y = best
+        moved_marks = affinity.translate(marks, x, y) if marks is not None else None
+        placements.append(Placement(inst, rot, affinity.translate(shape, x, y), moved_marks))
         mh, mw = mask.shape
         blocked[r:r + mh, c:c + mw] |= mask
     return placements, used_len, used_w

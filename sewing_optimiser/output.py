@@ -67,6 +67,8 @@ def layout_svg(layout, stripes=None, inverted=False, calibration=True):
     for p in layout.placements:
         out.append(_polygon(p.outline, 'stroke-width="0.8"'))
         out += _grainline(p)
+        for mark in getattr(p.marks, "geoms", []):
+            out.append(f'<polyline points="{_points(mark.coords)}" stroke-width="0.8"/>')
         c = p.outline.representative_point()
         out.append(f'<text x="{c.x + 4:.1f}" y="{c.y:.1f}" fill="{fg}" stroke="none">{escape(p.instance.label)}</text>')
     title = f"{layout.fabric}: length used {length:.0f} mm, width used {layout.width_used:.0f} mm"
