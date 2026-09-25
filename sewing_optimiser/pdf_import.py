@@ -16,6 +16,7 @@ MIN_PIECE_AREA = 100  # mm²; smaller closed shapes are markings
 MIN_FOLD_EDGE = 30  # mm; shortest straight edge accepted as a fold edge
 JOIN_GAP = 1  # mm; faces closer than twice this are halves of one piece
 NOTCH_MAX = 15  # mm; short strokes touching an outline are notches
+GAP_CLOSE = 2  # mm; line ends this close to another line are joined to it
 ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
 
 
@@ -45,6 +46,63 @@ class Piece:
 
 def list_layers(path):
     return [ocg["name"] for ocg in pymupdf.open(path).get_ocgs().values()]
+
+
+def _style(d):
+    """Line colour and dash pattern, e.g. '#008000 16 6'."""
+    r, g, b = (d.get("color") or (0, 0, 0))[:3]
+    dashes = re.sub(r"[\[\]]|\s0$", "", d.get("dashes") or "").split()
+    return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}" + "".join(" " + x for x in dashes)
+
+
+def _black(d):
+    return max((d.get("color") or (0, 0, 0))[:3]) < 0.15
+
+
+def selector(size):
+    """Which drawings belong to a size: a PDF layer name ('|' joins several), 'style:<style>'
+    (lines of that colour and dash pattern, plus black lines shared by every size), or None (all)."""
+    if size is None:
+        return lambda d: True
+    if size.startswith("style:"):
+        key = size[6:]
+        return lambda d: _style(d) == key or _black(d)
+    names = set(size.split("|"))
+    return lambda d: d.get("layer") in names
+
+
+def list_sizes(path):
+    """(value, label) for each size: the PDF layers, or else the coloured line styles.
+
+    A line style is named after the legend entry above a short horizontal sample of it.
+    """
+    doc = pymupdf.open(path)
+    layers = list_layers(path)
+    if layers:
+        return [(name, name) for name in layers]
+    names = {}
+    for page in doc:
+        for d in page.get_drawings():
+            if "s" not in d["type"] or _black(d):
+                continue
+            key = _style(d)
+            r = d["rect"]
+            if r.height < 2 and r.width < 150:  # a short horizontal legend sample, under its size name
+                above = sorted((r.y0 - tr.y1, t) for t, tr in _text_lines(page)
+                               if tr.y1 <= r.y0 + 2 and tr.x0 > r.x0 - 5 and r.y0 - tr.y1 < 40)
+                named = [t for _, t in above if t[0].isupper()]
+                if named:
+                    names[key] = named[0].split(" ")[0].rstrip(",:")
+            names.setdefault(key, None)
+    return [("style:" + k, f"{v or 'lines'} ({k})") for k, v in names.items()]
+
+
+def _text_lines(page):
+    for block in page.get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            text = "".join(s["text"] for s in line["spans"]).strip()
+            if text:
+                yield text, pymupdf.Rect(line["bbox"])
 
 
 def _mm(p):
@@ -174,12 +232,13 @@ def _key(geom):
     return tuple(round(v * 2) for xy in geom.coords for v in xy)  # to 0.5 mm
 
 
-def sheet_lines(doc, sheet, layers):
-    """Stroked lines of a sheet on the given layers (None: every stroke), mm, and the widest stroke."""
+def sheet_lines(doc, sheet, size):
+    """Stroked lines of a sheet belonging to a size (see selector), mm, and the widest stroke."""
+    wanted = selector(size)
     lines, stroke, seen = [], 0.0, set()
     for number, dx, dy in sheet:
         for d in doc[number].get_drawings():
-            if "s" in d["type"] and (layers is None or d.get("layer") in layers):
+            if "s" in d["type"] and wanted(d):
                 for pl in _polylines(d["items"]):
                     line = affinity.translate(LineString(pl), dx, dy)
                     if _key(line) not in seen:  # tiles repeat paths that cross them
@@ -205,9 +264,27 @@ def sheet_text(doc, sheet):
     return found
 
 
+def _regions(lines, gap=GAP_CLOSE):
+    """Closed regions formed by the lines, after bridging line ends that stop short of another line."""
+    from shapely.ops import nearest_points
+
+    bridges = []
+    for i, line in enumerate(lines):
+        if line.is_closed:
+            continue
+        others = [o for j, o in enumerate(lines) if j != i]
+        for end in (Point(line.coords[0]), Point(line.coords[-1])):
+            near = [o for o in others if 1e-6 < o.distance(end) < gap]
+            if near and not any(o.distance(end) <= 1e-6 for o in others):
+                target = min(near, key=end.distance)
+                bridges.append(LineString([end, nearest_points(target, end)[0]]))
+    # grid snap joins near-coincident ends
+    return polygonize(set_precision(unary_union(lines + bridges), 0.01))
+
+
 def faces(lines):
     """Every closed region the lines form, as outlines without holes (for picking pieces by hand)."""
-    found = polygonize(set_precision(unary_union(lines), 0.01))
+    found = _regions(lines)
     return [Polygon(f.exterior) for f in found if f.area > MIN_PIECE_AREA]
 
 
@@ -219,7 +296,7 @@ def _outlines(lines, stroke):
     closed faces, and faces that share an edge (or nearly do) are merged into
     one piece.
     """
-    found = polygonize(set_precision(unary_union(lines), 0.01))  # grid snap joins near-coincident ends
+    found = _regions(lines)
     merged = unary_union([f.buffer(JOIN_GAP) for f in found]).buffer(-JOIN_GAP)
     parts = getattr(merged, "geoms", [merged])
     return [Polygon(p.exterior).buffer(-stroke / 2) for p in parts if p.area > MIN_PIECE_AREA]
@@ -239,22 +316,26 @@ def _reflect(geom, a, b):
 def _unfold(outline, marks, fold_texts, grain_deg):
     """Mirror a half piece across its fold edge.
 
-    The fold edge is the long straight edge, parallel to a fold label or to
-    the grainline, that lies closest to a fold label.
+    The fold edge is the long straight edge closest to a fold label that runs
+    along the grainline (vertical on the page when no grainline is marked),
+    or failing that, along a fold label.
     """
-    directions = [d for _, d in fold_texts] + ([grain_deg] if grain_deg is not None else [])
     coords = list(outline.simplify(0.1).exterior.coords)
-    best = None
-    for a, b in zip(coords, coords[1:]):
-        edge = LineString([a, b])
-        if edge.length < MIN_FOLD_EDGE:
-            continue
-        angle = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
-        if not any(abs((angle - d + 90) % 180 - 90) < 3 for d in directions):
-            continue
-        dist = min(edge.distance(c) for c, _ in fold_texts)
-        if best is None or dist < best[0]:
-            best = (dist, a, b)
+    grain = grain_deg if grain_deg is not None else 90.0
+    for directions in ([grain], [d for _, d in fold_texts]):
+        best = None
+        for a, b in zip(coords, coords[1:]):
+            edge = LineString([a, b])
+            if edge.length < MIN_FOLD_EDGE:
+                continue
+            angle = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+            if not any(abs((angle - d + 90) % 180 - 90) < 3 for d in directions):
+                continue
+            dist = min(edge.distance(c) for c, _ in fold_texts)
+            if best is None or dist < best[0]:
+                best = (dist, a, b)
+        if best is not None:
+            break
     if best is None:
         return None
     _, a, b = best
@@ -316,10 +397,9 @@ def pieces_from_outlines(texts, outlines, marks=None):
 def extract_pieces(path, size_layer=None):
     """Pieces of one size from every sheet. size_layer None takes every stroke (a file per size)."""
     doc = pymupdf.open(path)
-    layers = None if size_layer is None else {size_layer}
     pieces = []
     for number, sheet in enumerate(sheets(doc)):
-        lines, stroke = sheet_lines(doc, sheet, layers)
+        lines, stroke = sheet_lines(doc, sheet, size_layer)
         outlines = _outlines(lines, stroke)
         for piece in pieces_from_outlines(sheet_text(doc, sheet), outlines, _notches(lines, outlines)):
             piece.page = number

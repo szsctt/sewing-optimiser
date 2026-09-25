@@ -111,7 +111,7 @@ async function init() {
 
 async function loadInfo() {
   const info = await api('/api/info?pdf=' + encodeURIComponent($('file').value));
-  $('size').innerHTML = (info.layers.length ? info.layers : []).map(l => `<option>${l}</option>`).join('') +
+  $('size').innerHTML = info.sizes.map(([v, l]) => `<option value="${v.replace(/"/g, '&quot;')}">${l}</option>`).join('') +
     '<option value="">(every line)</option>';
   $('pickpage').innerHTML = info.pages.map((p, i) => `<option value="${i}">${i + 1}${p.pages.length > 1 ? ` (pages ${p.pages[0] + 1}–${p.pages.at(-1) + 1} joined)` : ''}</option>`).join('');
 }
@@ -219,7 +219,8 @@ async function showPick() {
 
 async function drawPick() {
   const pdf = encodeURIComponent($('file').value), page = $('pickpage').value;
-  const layers = $('size').value ? encodeURIComponent($('size').value + '|' + otherLayers()) : '';
+  const size = $('size').value;
+  const layers = !size ? '' : encodeURIComponent(size.startsWith('style:') ? size : size + '|' + otherLayers());
   $('status').textContent = 'Finding regions…';
   pageFaces = await api(`/api/faces?pdf=${pdf}&page=${page}&layers=${layers}`);
   const info = await api('/api/info?pdf=' + pdf);

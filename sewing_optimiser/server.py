@@ -15,7 +15,7 @@ from . import project as proj
 from .layout import _align, make_layouts
 from .nest import Stripes
 from .output import layout_svg, write_pdf
-from .pdf_import import MM_PER_PT, faces, list_layers, sheet_lines, sheets
+from .pdf_import import MM_PER_PT, faces, list_sizes, sheet_lines, sheets
 
 ROOT = Path(__file__).parent.parent
 EXAMPLES = ROOT / "examples"
@@ -72,7 +72,7 @@ def info(pdf: str):
         _, bound = _sheet_doc(doc, sheet)
         out.append({"x": bound.x0 * MM_PER_PT, "y": bound.y0 * MM_PER_PT,
                     "w": bound.width * MM_PER_PT, "h": bound.height * MM_PER_PT, "pages": [n for n, _, _ in sheet]})
-    return {"layers": list_layers(_pdf(pdf)), "pages": out}
+    return {"sizes": list_sizes(_pdf(pdf)), "pages": out}
 
 
 @app.get("/api/project")
@@ -91,8 +91,7 @@ def page_png(pdf: str, page: int = 0, dpi: int = 12):
 @app.get("/api/faces")
 def page_faces(pdf: str, page: int = 0, layers: str = ""):
     doc = pymupdf.open(_pdf(pdf))
-    wanted = set(layers.split("|")) if layers else None
-    found = faces(sheet_lines(doc, sheets(doc)[page], wanted)[0])
+    found = faces(sheet_lines(doc, sheets(doc)[page], layers or None)[0])
     found.sort(key=lambda f: f.area)  # small first, so they are drawn on top
     return [{"d": _path_d(f), "coords": [list(c) for c in f.exterior.coords]} for f in found[:2000]]
 

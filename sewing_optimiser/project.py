@@ -49,8 +49,7 @@ def pieces(project):
         found = []
         for number, outlines in project["picked"].items():
             sheet = all_sheets[int(number)]
-            layers = None if project["size"] is None else {project["size"]}
-            lines, stroke = sheet_lines(doc, sheet, layers)
+            lines, stroke = sheet_lines(doc, sheet, project["size"])
             # picked regions that touch form one piece; cut inside the drawn line
             merged = unary_union([Polygon(o).buffer(JOIN_GAP) for o in outlines]).buffer(-JOIN_GAP - stroke / 2)
             polys = [Polygon(p.exterior) for p in getattr(merged, "geoms", [merged]) if not p.is_empty]

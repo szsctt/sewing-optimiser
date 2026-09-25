@@ -6,7 +6,7 @@ from pathlib import Path
 from .layout import FabricSettings, make_layouts
 from .nest import Stripes
 from .output import write_pdf, write_svg
-from .pdf_import import extract_pieces, list_layers
+from .pdf_import import extract_pieces, list_sizes
 
 
 def _matches(piece, texts):
@@ -16,7 +16,7 @@ def _matches(piece, texts):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("pdf")
-    ap.add_argument("--size", help="PDF layer holding the chosen size; omit to list layers (files without layers use every line)")
+    ap.add_argument("--size", help="size: a PDF layer or a line style (style:...); omit to list them (files without either use every line)")
     ap.add_argument("--width", type=float, help="fabric width in mm, selvedge to selvedge")
     ap.add_argument("--gap", type=float, default=3.0, help="minimum gap between pieces, mm")
     ap.add_argument("--one-way", action="store_true", help="napped or one-way fabric: no 180° turns")
@@ -31,9 +31,9 @@ def main():
     ap.add_argument("--out", default="layout", help="output path without extension")
     args = ap.parse_args()
 
-    layers = list_layers(args.pdf)
-    if not args.size and layers:
-        print("\n".join(layers))
+    sizes = list_sizes(args.pdf)
+    if not args.size and sizes:
+        print("\n".join(f"{value}    {label}" if value != label else value for value, label in sizes))
         return
     if not args.width:
         ap.error("--width is required with --size")
