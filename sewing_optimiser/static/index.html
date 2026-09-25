@@ -48,7 +48,7 @@
     <h2>Pick pieces</h2>
     <p class="muted">Click each closed region that is a pattern piece for your size. Click again to deselect.
       Regions that touch are joined into one piece. For nested sizes, click the ring just inside your size's line.</p>
-    <div class="row"><label>Page <select id="pickpage"></select></label><button id="pickdone" class="primary">Use picked pieces</button></div>
+    <div class="row"><label>Sheet <select id="pickpage"></select></label><button id="pickdone" class="primary">Use picked pieces</button></div>
     <div id="pickview"></div>
   </section>
 
@@ -113,7 +113,7 @@ async function loadInfo() {
   const info = await api('/api/info?pdf=' + encodeURIComponent($('file').value));
   $('size').innerHTML = (info.layers.length ? info.layers : []).map(l => `<option>${l}</option>`).join('') +
     '<option value="">(every line)</option>';
-  $('pickpage').innerHTML = info.pages.map((p, i) => `<option value="${i}">${i + 1}</option>`).join('');
+  $('pickpage').innerHTML = info.pages.map((p, i) => `<option value="${i}">${i + 1}${p.pages.length > 1 ? ` (pages ${p.pages[0] + 1}–${p.pages.at(-1) + 1} joined)` : ''}</option>`).join('');
 }
 
 $('load').onclick = async () => {
@@ -223,10 +223,10 @@ async function drawPick() {
   $('status').textContent = 'Finding regions…';
   pageFaces = await api(`/api/faces?pdf=${pdf}&page=${page}&layers=${layers}`);
   const info = await api('/api/info?pdf=' + pdf);
-  const {w, h} = info.pages[page];
+  const {x, y, w, h} = info.pages[page];
   const sel = new Set((picked[page] || []).map(c => JSON.stringify(c)));
-  $('pickview').innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:80vh">
-    <image href="/api/page.png?pdf=${pdf}&page=${page}&dpi=30" x="0" y="0" width="${w}" height="${h}"/>
+  $('pickview').innerHTML = `<svg viewBox="${x} ${y} ${w} ${h}" style="width:100%;max-height:80vh">
+    <image href="/api/page.png?pdf=${pdf}&page=${page}&dpi=30" x="${x}" y="${y}" width="${w}" height="${h}"/>
     ${pageFaces.map((f, i) => `<path data-i="${i}" d="${f.d}" class="${sel.has(JSON.stringify(f.coords)) ? 'sel' : ''}"/>`).join('')}</svg>`;
   $('pickview').querySelectorAll('path').forEach(el => el.onclick = () => el.classList.toggle('sel'));
   $('status').textContent = `${pageFaces.length} regions`;

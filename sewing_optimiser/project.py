@@ -10,7 +10,7 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 from .layout import FabricSettings
-from .pdf_import import JOIN_GAP, _linework, _notches, extract_pieces, pieces_from_outlines
+from .pdf_import import JOIN_GAP, _notches, extract_pieces, pieces_from_outlines, sheet_lines, sheet_text, sheets
 
 PROJECTS = Path(__file__).parent.parent / "projects"
 PIECE_FIELDS = ("name", "copies", "include", "fabric", "cross_grain", "mirror", "cut_on_fold", "match_y", "grain_deg")
@@ -45,16 +45,17 @@ def pieces(project):
     """Pieces read from the PDF with the saved review choices applied."""
     if project.get("picked"):
         doc = pymupdf.open(project["pdf"])
+        all_sheets = sheets(doc)
         found = []
         for number, outlines in project["picked"].items():
-            page = doc[int(number)]
+            sheet = all_sheets[int(number)]
             layers = None if project["size"] is None else {project["size"]}
-            lines, stroke = _linework(page, layers)
+            lines, stroke = sheet_lines(doc, sheet, layers)
             # picked regions that touch form one piece; cut inside the drawn line
             merged = unary_union([Polygon(o).buffer(JOIN_GAP) for o in outlines]).buffer(-JOIN_GAP - stroke / 2)
             polys = [Polygon(p.exterior) for p in getattr(merged, "geoms", [merged]) if not p.is_empty]
             marks = _notches(lines, polys)
-            for piece in pieces_from_outlines(page, polys, marks):
+            for piece in pieces_from_outlines(sheet_text(doc, sheet), polys, marks):
                 piece.page = int(number)
                 found.append(piece)
     else:
