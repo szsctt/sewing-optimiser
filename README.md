@@ -11,8 +11,9 @@ Then open http://localhost:8000.
 1. **Pattern.** Choose a PDF from `examples/` and its size: a PDF layer, or for files without layers a line colour and dash style named from the pattern's legend ("every line" for files with one size per file). Tick *Pick pieces by hand* for files the reader cannot split into pieces; then click the regions that make up each piece.
 2. **Pieces.** Untick option pieces you are not making (short or long sleeves), and check names, copies, fabric (pieces with different fabric names get separate layouts), grainline, cross-grain, mirrored pairs and cut-on-fold. Lines inside a piece that mark cutting options ("cut at the shorter line for cuffs") split it into dashed parts; click a part off to cut that option. Click a piece picture to set its stripe match line, or its lengthen/shorten line and amount (for example to match an inseam). Pieces given only by size in the instructions (waistbands, cuffs) can be added as rectangles.
 3. **Fabric.** Width, what to aim for (shortest length, narrowest width, or most compact), gap between pieces, seam allowance to add, one-way fabric, stripe repeat. *Use leftover fabric from a photo*: photograph the fabric from above with an A4 sheet on it, click the sheet's corners, trace the fabric edge, and mark the grain direction.
-4. **Lay out.** Shows the layout and fabric used; download a 1:1 PDF, or open the projector view.
-5. **Projector.** Calibrate once per projector set-up: drag four handles onto the corners of a known rectangle (a cutting mat), then check the 10 cm square. Arrow keys move the layout to project it in sections. Calibration is kept in the browser.
+4. **Combine patterns.** *Add this pattern to the combined layout* saves its reviewed pieces to a list; *Lay out all together* lays every listed pattern's pieces on one fabric.
+5. **Lay out.** Shows the layout and fabric used; download a 1:1 PDF, or open the projector view.
+6. **Projector.** Calibrate once per projector set-up: drag four handles onto the corners of a known rectangle (a cutting mat), then check the 10 cm square. Arrow keys move the layout to project it in sections. Calibration is kept in the browser.
 
 Choices are saved per pattern and size in `projects/`.
 

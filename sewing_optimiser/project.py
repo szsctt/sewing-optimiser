@@ -108,3 +108,26 @@ def fabric_settings(project):
     f = dict(project["fabric"])
     shape = f.pop("shape", None)
     return FabricSettings(**f, shape=Polygon(shape) if shape else None)
+
+
+def combined():
+    """Patterns laid out together: [{"pdf", "size"}], kept in projects/combined.json."""
+    path = PROJECTS / "combined.json"
+    return json.loads(path.read_text()) if path.exists() else []
+
+
+def save_combined(entries):
+    PROJECTS.mkdir(exist_ok=True)
+    (PROJECTS / "combined.json").write_text(json.dumps(entries, indent=1))
+
+
+def combined_pieces(root):
+    """The reviewed pieces of every combined pattern, named after their pattern (pdf paths relative to root)."""
+    found = []
+    for entry in combined():
+        p = load(entry["pdf"], entry["size"])
+        label = f"{Path(entry['pdf']).parent.name} {entry['size'] or ''}".strip()
+        for piece in pieces(dict(p, pdf=str(root / p["pdf"]))):
+            piece.name = f"{label}: {piece.name}"
+            found.append(piece)
+    return found

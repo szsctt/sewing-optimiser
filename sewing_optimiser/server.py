@@ -148,12 +148,9 @@ def get_pieces(project: dict):
     return {"pieces": out, "joins": full["joins"]}
 
 
-@app.post("/api/layout")
-def layout(project: dict):
-    proj.save(project)
-    settings = proj.fabric_settings(project)
+def _laid_out(pieces, settings):
     try:
-        layouts = make_layouts(proj.pieces(_abs(project)), settings)
+        layouts = make_layouts(pieces, settings)
     except ValueError as e:
         raise HTTPException(400, str(e))
     stripes = Stripes(settings.stripe_repeat, settings.stripe_phase) if settings.stripe_repeat else None
@@ -163,6 +160,41 @@ def layout(project: dict):
         "fold_width": l.fold_width, "utilisation": l.utilisation, "compactness": l.compactness, "notes": l.notes,
         "flat_width": l.flat_width,
     } for l in layouts]
+
+
+@app.post("/api/layout")
+def layout(project: dict):
+    proj.save(project)
+    return _laid_out(proj.pieces(_abs(project)), proj.fabric_settings(project))
+
+
+@app.get("/api/combined")
+def combined():
+    return proj.combined()
+
+
+@app.post("/api/combined/add")
+def combined_add(project: dict):
+    """Save the pattern's review choices and add it to the combined layout."""
+    proj.save(project)
+    entries = proj.combined()
+    entry = {"pdf": project["pdf"], "size": project["size"]}
+    if entry not in entries:
+        proj.save_combined(entries + [entry])
+    return proj.combined()
+
+
+@app.post("/api/combined/remove")
+def combined_remove(i: int):
+    entries = proj.combined()
+    proj.save_combined(entries[:i] + entries[i + 1:])
+    return proj.combined()
+
+
+@app.post("/api/combined/layout")
+def combined_layout(fabric: dict):
+    """All combined patterns' pieces on one fabric, with these fabric settings."""
+    return _laid_out(proj.combined_pieces(ROOT), proj.fabric_settings({"fabric": fabric}))
 
 
 @app.get("/api/layout.svg")

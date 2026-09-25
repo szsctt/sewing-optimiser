@@ -86,3 +86,14 @@ def test_pocket_skirt_a4_pieces_and_notches():
     assert {p.name: p.copies for p in pieces} == {
         "Centre Front Panel": 1, "Centre Back Panel": 1, "Lower Side Panel": 2, "Upper Side Panel": 2}
     assert all(len(p.marks.geoms) >= 6 for p in pieces)  # notches, as ticks into the piece
+
+
+def test_combined_layout(client):
+    cuff, _ = load(client, CUFF, "2-3t")
+    client.post("/api/combined/add", json=cuff)
+    ringer, _ = load(client, "examples/Ringer tee/bt99-A0-pattern.pdf", "2-3t")
+    entries = client.post("/api/combined/add", json=ringer).json()
+    assert len(entries) == 2
+    [layout] = client.post("/api/combined/layout", json=cuff["fabric"]).json()
+    assert "Cuff leggings 2-3t: LEFT LEG" in layout["svg"] and "Ringer tee 2-3t: BACK" in layout["svg"]
+    assert len(client.post("/api/combined/remove", params={"i": 0}).json()) == 1

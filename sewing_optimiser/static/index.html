@@ -115,7 +115,15 @@
       <div class="row"><input type="file" id="photo-file" accept="image/*"><button id="photo-undo">Undo point</button><button id="photo-next" class="primary">Next</button></div>
       <canvas id="photo-canvas"></canvas>
     </div>
-    <p><button id="run" class="primary">Lay out</button> <span id="run-status" class="muted"></span></p>
+    <p><button id="run" class="primary">Lay out</button>
+      <button id="combine-add">Add this pattern to the combined layout</button>
+      <span id="run-status" class="muted"></span></p>
+    <div id="combined-box" class="hidden">
+      <h2>Combined layout</h2>
+      <p class="muted">Pieces of these patterns, as reviewed, laid out together on the fabric above.</p>
+      <div id="combined-list"></div>
+      <p><button id="combine-run" class="primary">Lay out all together</button></p>
+    </div>
   </section>
 
   <section id="result-section" class="hidden">
@@ -145,6 +153,7 @@ async function init() {
   $('file').innerHTML = files.map(f => `<option>${f}</option>`).join('');
   $('file').onchange = loadInfo;
   loadInfo();
+  showCombined(await api('/api/combined'));
 }
 
 let infoRequest = 0;
@@ -265,10 +274,23 @@ function collect() {
   return project;
 }
 
-$('run').onclick = async () => {
+$('run').onclick = () => lay(() => api('/api/layout', collect()));
+$('combine-run').onclick = () => lay(() => api('/api/combined/layout', collect().fabric));
+$('combine-add').onclick = async () => showCombined(await api('/api/combined/add', collect()));
+
+function showCombined(entries) {
+  $('combined-box').classList.toggle('hidden', !entries.length);
+  $('combined-list').innerHTML = entries.map((e, i) =>
+    `<div>${e.pdf.split('/').slice(-2).join(' / ')}${e.size ? ', ' + e.size.replace(/^style:/, 'line style ') : ''}
+      <button data-c="${i}">Remove</button></div>`).join('');
+  $('combined-list').querySelectorAll('button').forEach(b => b.onclick = async () =>
+    showCombined(await api('/api/combined/remove?i=' + b.dataset.c, {})));
+}
+
+async function lay(request) {
   $('run-status').textContent = 'Laying out…';
   try {
-    const layouts = await api('/api/layout', collect());
+    const layouts = await request();
     $('result-section').classList.remove('hidden');
     $('layouts').innerHTML = layouts.map((l, i) => `
       <h3>${l.fabric}</h3>
