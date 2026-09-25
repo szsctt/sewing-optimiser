@@ -130,7 +130,8 @@ def list_sizes(path):
                     names[key] = named[0].split(" ")[0].rstrip(",:")
                     if _black(d):
                         sized.add(key)  # black lines are shared by every size, unless the legend names them
-            if not _black(d) and (len(d["items"]) > 1 or d["items"][0][0] not in "lre"):  # lines, boxes are not sizes
+            long = any(LineString(pl).length > 60 for pl in _polylines(d["items"]))  # not lettering drawn as lines
+            if not _black(d) and long and (len(d["items"]) > 1 or d["items"][0][0] not in "lre"):  # lines, boxes are not sizes
                 sized.add(key)
     for page in doc:  # legends written in the line colour
         for block in page.get_text("dict")["blocks"]:
@@ -338,15 +339,44 @@ def sheet_lines(doc, sheet, size):
     wanted = selector(size)
     lines, stroke, seen = [], 0.0, set()
     for number, dx, dy in sheet:
+        page_w, page_h = doc[number].rect.width * MM_PER_PT, doc[number].rect.height * MM_PER_PT
         for d in doc[number].get_drawings():
             if "s" in d["type"] and wanted(d):
                 for pl in _polylines(d["items"]):
+                    if len(sheet) == 1 and _page_frame(pl, page_w, page_h):  # tiles do run to their page edges
+                        continue
                     line = affinity.translate(LineString(pl), dx, dy)
                     if _key(line) not in seen:  # tiles repeat paths that cross them
                         seen.add(_key(line))
                         lines.append(line)
                 stroke = max(stroke, (d.get("width") or 0) * MM_PER_PT)
     return lines, stroke
+
+
+def _page_frame(points, page_w, page_h, edge=15):
+    """A border drawn round the page (whole, or one side at a time), not part of any piece."""
+    xs, ys = [x for x, _ in points], [y for _, y in points]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    wide = x1 - x0 > 0.8 * page_w and (y0 < edge or y1 > page_h - edge)
+    tall = y1 - y0 > 0.8 * page_h and (x0 < edge or x1 > page_w - edge)
+    straight = len(points) == 2 or (x1 - x0 < 1 or y1 - y0 < 1)
+    return (wide or tall) and (straight or (wide and tall))
+
+
+def _grain_from_arrow(shape, lines):
+    """Direction of the grainline drawn inside a piece: its longest straight line clear of the edge."""
+    inner = shape.buffer(-5)
+    best = None
+    for line in lines:
+        if len(line.coords) != 2 or line.length < 0.25 * max(shape.bounds[2] - shape.bounds[0],
+                                                          shape.bounds[3] - shape.bounds[1]):
+            continue
+        if inner.contains(line) and (best is None or line.length > best.length):
+            best = line
+    if best is None:
+        return None
+    (ax, ay), (bx, by) = best.coords
+    return math.degrees(math.atan2(by - ay, bx - ax))
 
 
 def sheet_text(doc, sheet):
@@ -606,11 +636,16 @@ def extract_pieces(path, size_layer=None):
         texts = sheet_text(doc, sheet)
         boxes = _shaded_boxes(doc, sheet)
         dashed = _dashed_lines(doc, sheet)
+        every_line = None
         for piece in pieces_from_outlines(texts, outlines, _notches(lines, outlines)):
             if _check_square(piece) or any(b.contains(piece.outline) for b in boxes):
                 continue
             if piece.half is None and not list_layers(path):  # layered patterns draw sizes, not folds, dashed
                 piece = _fold_on_dashed_edge(piece, dashed)
+            if piece.grain_deg is None:  # no 'grainline' label: use the arrow
+                if every_line is None:
+                    every_line = sheet_lines(doc, sheet, None)[0]
+                piece.grain_deg = _grain_from_arrow(piece.half if piece.half is not None else piece.outline, every_line)
             piece.page = number
             _option_regions(piece, parts, texts)
             pieces.append(piece)
@@ -682,7 +717,7 @@ def _check_square(piece):
     """A printing check square (1 inch, 4 cm, 5 cm) rather than a piece."""
     minx, miny, maxx, maxy = piece.outline.bounds
     w, h = maxx - minx, maxy - miny
-    return abs(w - h) < 2 and 20 < w < 55 and piece.outline.area > 0.95 * w * h
+    return abs(w - h) < 2 and 20 < w < 130 and piece.outline.area > 0.95 * w * h  # up to a 5 inch grid
 
 
 def _shaded_boxes(doc, sheet):

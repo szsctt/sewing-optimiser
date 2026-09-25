@@ -56,3 +56,15 @@ def test_option_part_left_off():
     smallest = min(range(len(back.regions)), key=lambda i: back.regions[i].area)
     shorter = trim(back, [smallest])
     assert shorter.half is not None and shorter.outline.area < back.outline.area
+
+
+MERINO = NAPPY / "Merino leggings/2025-54-1-10-06-11_women-s-leggings/03-pa-pattern-a0-womens-base-leggings-elastic-suzanne-scott-no851.pdf"
+
+
+@pytest.mark.skipif(not MERINO.exists(), reason="example patterns are not in the repository")
+def test_grainline_from_arrow():
+    """The leggings have no 'grainline' label and are drawn at a slant; the arrow gives the grain."""
+    big = [p for p in extract_pieces(MERINO) if p.outline.area > 100_000]
+    assert len(big) == 3  # the page border and check grids are not pieces
+    assert all(p.grain_deg is not None for p in big)
+    assert any(abs(abs(p.grain_deg) - 90) > 5 for p in big)  # slanted on the sheet
