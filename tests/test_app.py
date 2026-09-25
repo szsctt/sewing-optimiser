@@ -77,3 +77,12 @@ def test_picking_nested_sizes(client):
     p["picked"] = {"0": [r["at"] for r in regions[:12]]}
     grown = client.post("/api/pieces", json=p).json()["pieces"]
     assert max(x["w"] * x["h"] for x in grown) > one["w"] * one["h"]
+
+
+def test_pocket_skirt_a4_pieces_and_notches():
+    from sewing_optimiser.pdf_import import extract_pieces
+
+    pieces = extract_pieces(EXAMPLES / "Pocket Skirt/A4-Pattern_PeppermintxPaper-Theory_Pocket-Skirt.pdf", "Size 12")
+    assert {p.name: p.copies for p in pieces} == {
+        "Centre Front Panel": 1, "Centre Back Panel": 1, "Lower Side Panel": 2, "Upper Side Panel": 2}
+    assert all(len(p.marks.geoms) >= 6 for p in pieces)  # notches, as ticks into the piece

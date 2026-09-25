@@ -20,12 +20,13 @@ MIN_PIECE_AREA = 500  # mm²; smaller closed shapes are markings or size labels
 MIN_FOLD_EDGE = 30  # mm; shortest straight edge accepted as a fold edge
 JOIN_GAP = 1  # mm; faces closer than twice this are halves of one piece
 NOTCH_MAX = 15  # mm; short strokes touching an outline are notches
+NOTCH_TICK = 6  # mm; length of the tick drawn for a notch
 GAP_CLOSE = 2  # mm; line ends this close to another line are joined to it
 END_GAP = 5  # mm; loose line ends this close to each other are joined
 # text inside a piece that is not its name
 NOT_NAME = (r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyright|order|square|reference|"
             r"indicates|length|\.com|^sizes?\b|do not cut|stitch|^[\d\s]+$|line for|version|"
-            r"^(P|PM|NB|\d+-\d+[mt]?|\d+T)$|included in all|allowance|^1/4|\bseam\b|in all pieces")
+            r"^(P|PM|NB|\d+-\d+[mt]?|\d+T)$|included in all|allowance|^1/4|\bseam\b|in all pieces|^\S$|shorten|lengthen")
 NAMED_CUT = re.compile(r"^(.+?)\s*[-–—:]\s*cut\b", re.I)  # 'Right Front - cut 1
 ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
 
@@ -488,15 +489,38 @@ def _unfold(outline, marks, fold_texts, grain_deg):
 
 
 def _notches(lines, outlines):
-    """Short strokes touching each outline."""
-    marks = [[] for _ in outlines]
+    """Notches on each outline, as ticks NOTCH_TICK mm long running into the piece from its edge.
+
+    A notch is drawn as one or a few short strokes that touch the outline and
+    stand off it (strokes lying along it are pieces of the outline itself).
+    """
+    found = [[] for _ in outlines]
     for line in lines:
         if line.length > NOTCH_MAX:
             continue
         dists = [o.exterior.distance(line) for o in outlines]
-        if dists and min(dists) < 2:
-            marks[dists.index(min(dists))].append(line)
-    return [MultiLineString(m) for m in marks]
+        if not dists or min(dists) >= 2:
+            continue
+        i = dists.index(min(dists))
+        edge = outlines[i].exterior
+        if max(edge.distance(Point(c)) for c in line.coords) > 0.8:
+            found[i].append(line)
+    marks = []
+    for outline, strokes in zip(outlines, found):
+        ticks = []
+        clusters = unary_union([l.buffer(2) for l in strokes])
+        for cluster in getattr(clusters, "geoms", [clusters]) if strokes else []:
+            edge = outline.exterior
+            at = edge.project(cluster.centroid)
+            p, a, b = edge.interpolate(at), edge.interpolate(at - 1), edge.interpolate(at + 1)
+            nx, ny = -(b.y - a.y), b.x - a.x
+            n = math.hypot(nx, ny) or 1
+            nx, ny = nx / n, ny / n
+            if not outline.contains(Point(p.x + nx, p.y + ny)):
+                nx, ny = -nx, -ny
+            ticks.append(LineString([(p.x, p.y), (p.x + nx * NOTCH_TICK, p.y + ny * NOTCH_TICK)]))
+        marks.append(MultiLineString(ticks))
+    return marks
 
 
 def pieces_from_outlines(texts, outlines, marks=None):
@@ -526,6 +550,8 @@ def pieces_from_outlines(texts, outlines, marks=None):
         cut = re.search(r"cut\s*(\d+)(\s*pairs?)?", joined, re.I)
         near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
         named = [m.group(1) for t in texts if (m := NAMED_CUT.match(t)) and not re.search(NOT_NAME, m.group(1), re.I)]
+        named += [before for before, t in zip(texts, texts[1:])  # a name on the line above 'Cut 1 Pair Self'
+                  if re.match(r"cut\s*\d", t, re.I) and not re.search(NOT_NAME, before, re.I)]
         name = named[0] if named else " ".join(name_parts or near[:1])
         name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0].strip() or "piece"  # drop instructions
         copies = int(cut.group(1)) * (2 if cut.group(2) else 1) if cut else 1

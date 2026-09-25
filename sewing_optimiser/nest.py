@@ -112,14 +112,15 @@ def _place_all(instances, fabric, gap, stripes, order):
     for i in order:
         inst = instances[i]
         best = None
+        # positions lower than the current length plus this piece can only be worse
+        tallest = max(v[3].shape[0] for v in inst.variants) if inst.variants else 0
+        grid = blocked[:min(rows, int(used_len / RES) + 2 * tallest + 2)].astype(np.float32)
         for rot, shape, extras, mask, margin, match_y in inst.variants:
             mh, mw = mask.shape
             if mh > rows or mw > cols:
                 continue
-            # positions lower than the current length plus this piece can only be worse
-            limit = min(rows, int(used_len / RES) + 2 * mh + 2)
             # overlap[r, c] > 0 where the mask's top-left cell at (r, c) hits a blocked cell
-            overlap = fftconvolve(blocked[:limit].astype(np.float32), mask[::-1, ::-1].astype(np.float32), mode="valid")
+            overlap = fftconvolve(grid, mask[::-1, ::-1].astype(np.float32), mode="valid")
             free = overlap < 0.5
             if inst.fold:
                 keep = np.zeros_like(free)
