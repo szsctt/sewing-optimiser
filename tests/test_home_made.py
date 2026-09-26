@@ -68,3 +68,17 @@ def test_grainline_from_arrow():
     assert len(big) == 3  # the page border and check grids are not pieces
     assert all(p.grain_deg is not None for p in big)
     assert any(abs(abs(p.grain_deg) - 90) > 5 for p in big)  # slanted on the sheet
+
+
+WATTLEBIRD = NAPPY / "Wattlebird jumpsuit/Common Stitch_Wattlebird Jumpsuit_A0 Pattern_Size 6-24.pdf"
+
+
+@pytest.mark.skipif(not WATTLEBIRD.exists(), reason="example patterns are not in the repository")
+def test_sizes_from_labels_on_each_line():
+    """Common Stitch draws every size in black and writes 'SIZE 12' along each size's line."""
+    assert [label for _, label in list_sizes(WATTLEBIRD)][:3] == ["Size 6", "Size 8", "Size 10"]
+    pieces = {p.name: p for p in extract_pieces(WATTLEBIRD, "label:12")}
+    assert {"FRONT LEG", "TOP FRONT", "STRAP / BINDING", "POCKET BACKING"} <= set(pieces)
+    assert pieces["FRONT LEG"].copies == 2  # 'CUT ONE PAIR'
+    assert pieces["TOP FRONT"].half is not None
+    assert abs(pieces["STRAP / BINDING"].grain_deg % 90 - 45) < 1  # 'cut on bias'

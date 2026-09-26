@@ -68,6 +68,7 @@ class Piece:
     lengthen_at: float | None = None  # ... at this many mm below the top of the grain-aligned piece
     page: int = 0  # sheet number (tiled pages joined count as one sheet)
     source: int | None = None  # index among the pieces read from the PDF
+    cut_marked: bool = True  # the pattern says how many to cut
     marks: MultiLineString = field(default_factory=MultiLineString)  # notches, same coordinates as outline
     half_marks: MultiLineString = field(default_factory=MultiLineString)  # notches of `half`
     regions: list = field(default_factory=list)  # parts that option lines split the drawn piece into, page mm
@@ -144,7 +145,50 @@ def list_sizes(path):
                         if key.split(" ")[0] == colour and legend and key not in names:
                             names[key] = words[0].rstrip(",:")
     sizes = [("style:" + k, f"{names.get(k) or 'lines'} ({k})") for k in sized]
-    return sizes if len(sizes) > 1 else []
+    if len(sizes) > 1:
+        return sizes
+    labelled = sorted({t for page in doc for t in _size_labels(page).values() if "-" not in t}, key=_size_order)
+    return [("label:" + t, f"Size {t}") for t in labelled] if len(labelled) > 1 else []
+
+
+SIZE_LABEL = re.compile(r"^size\s+(\S+(?:\s*-\s*\S+)?)$", re.I)
+
+
+def _size_order(token):
+    return (0, float(token)) if re.fullmatch(r"[\d.]+", token) else (1, token)
+
+
+def _size_labels(page):
+    """{index of a closed stroked path: size written along it}, for patterns that label each size's line."""
+    labels = []
+    for text, rect in _text_lines(page):
+        m = SIZE_LABEL.match(text.strip())
+        if m:
+            c = ((rect.x0 + rect.x1) / 2 * MM_PER_PT, (rect.y0 + rect.y1) / 2 * MM_PER_PT)
+            labels.append((Point(c), m.group(1).replace(" ", "")))
+    found = {}
+    for k, d in enumerate(page.get_drawings()):
+        if "s" not in d["type"] or not labels:
+            continue
+        for pl in _polylines(d["items"]):
+            line = LineString(pl)
+            if line.length < 100:
+                continue
+            dist, token = min((line.distance(c), t) for c, t in labels)
+            if dist < 3:
+                found[k] = token
+    return found
+
+
+def _in_size(token, size):
+    """Whether a label ('10', or a range '6-16') covers the size."""
+    if token == size:
+        return True
+    lo, _, hi = token.partition("-")
+    try:
+        return bool(hi) and float(lo) <= float(size) <= float(hi)
+    except ValueError:
+        return False
 
 
 def _text_lines(page):
@@ -335,12 +379,18 @@ def _key(geom):
 
 
 def sheet_lines(doc, sheet, size):
-    """Stroked lines of a sheet belonging to a size (see selector), mm, and the widest stroke."""
-    wanted = selector(size)
+    """Stroked lines of a sheet belonging to a size (see selector), mm, and the widest stroke.
+
+    A size 'label:<size>' keeps the lines labelled with that size (or a range holding it),
+    and every line with no size label."""
+    wanted = selector(None if size and size.startswith("label:") else size)
     lines, stroke, seen = [], 0.0, set()
     for number, dx, dy in sheet:
         page_w, page_h = doc[number].rect.width * MM_PER_PT, doc[number].rect.height * MM_PER_PT
-        for d in doc[number].get_drawings():
+        labels = _size_labels(doc[number]) if size and size.startswith("label:") else {}
+        for k, d in enumerate(doc[number].get_drawings()):
+            if k in labels and not _in_size(labels[k], size[6:]):
+                continue  # another size's line
             if "s" in d["type"] and wanted(d):
                 for pl in _polylines(d["items"]):
                     if len(sheet) == 1 and _page_frame(pl, page_w, page_h):  # tiles do run to their page edges
@@ -353,12 +403,12 @@ def sheet_lines(doc, sheet, size):
     return lines, stroke
 
 
-def _page_frame(points, page_w, page_h, edge=15):
+def _page_frame(points, page_w, page_h, edge=10):
     """A border drawn round the page (whole, or one side at a time), not part of any piece."""
     xs, ys = [x for x, _ in points], [y for _, y in points]
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-    wide = x1 - x0 > 0.8 * page_w and (y0 < edge or y1 > page_h - edge)
-    tall = y1 - y0 > 0.8 * page_h and (x0 < edge or x1 > page_w - edge)
+    wide = x1 - x0 > 0.95 * page_w - 2 * edge and (y0 < edge or y1 > page_h - edge)
+    tall = y1 - y0 > 0.95 * page_h - 2 * edge and (x0 < edge or x1 > page_w - edge)
     straight = len(points) == 2 or (x1 - x0 < 1 or y1 - y0 < 1)
     return (wide or tall) and (straight or (wide and tall))
 
@@ -601,17 +651,25 @@ def pieces_from_outlines(texts, outlines, marks=None):
         if dists[i] == 0 and not size_list and not re.search(NOT_NAME, text, re.I):
             names[i].append(text)
 
+    # a line printed in most pieces, such as the maker's logo, is not part of their names
+    if len(names) > 2:
+        common = {t for n in names for t in set(n) if sum(t in m for m in names) > 0.6 * len(names)}
+        names = [[t for t in n if t not in common] for n in names]
     pieces = []
     for outline, notches, texts, name_parts, g, fold_texts in zip(outlines, marks, labels, names, grain, folds):
         joined = " ".join(texts)
-        cut = re.search(r"cut\s*(\d+)(\s*pairs?)?", joined, re.I)
+        cut = re.search(r"cut\s*(\d+|one|two|three|four)(\s*pairs?)?", joined, re.I)
         near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
         named = [m.group(1) for t in texts if (m := NAMED_CUT.match(t)) and not re.search(NOT_NAME, m.group(1), re.I)]
         named += [before for before, t in zip(texts, texts[1:])  # a name on the line above 'Cut 1 Pair Self'
-                  if re.match(r"cut\s*\d", t, re.I) and not re.search(r"^cut\b|grain|\bfold\b|^sizes?\b|^[\d\s-]+$", before, re.I)]
+                  if re.match(r"cut\s*(\d|one|two|three|four)", t, re.I) and not re.search(r"^cut\b|grain|\bfold\b|^sizes?\b|^[\d\s.-]+$", before, re.I)]
         name = named[0] if named else " ".join(name_parts or near[:1])
         name = re.split(r"\s(?:Place|tape)\b|\s\(", name, flags=re.I)[0].strip() or "piece"  # drop instructions
-        copies = int(cut.group(1)) * (2 if cut.group(2) else 1) if cut else 1
+        name = re.sub(r"^\d+\.\s*", "", name) or name  # piece numbers such as '1.'
+        count = cut and (int(cut.group(1)) if cut.group(1).isdigit() else NUMBERS[cut.group(1).lower()])
+        copies = count * (2 if cut.group(2) else 1) if cut else 1
+        if g is None and re.search(r"\bbias\b", joined, re.I):
+            g = _long_axis(outline) + 45  # cut on the bias: grain at 45° to the piece's length
         on_fold = any(ON_FOLD.search(t) for _, _, t in fold_texts)
         unfolded = _unfold(outline, notches, [(c, d) for c, d, _ in fold_texts], g) if on_fold else None
         fabric = "interfacing" if re.search(r"interfacing", name, re.I) else "main"
@@ -621,6 +679,7 @@ def pieces_from_outlines(texts, outlines, marks=None):
                                 fabric=fabric))
         else:
             pieces.append(Piece(name, outline, g, copies, marks=notches, fabric=fabric))
+        pieces[-1].cut_marked = bool(cut)
     return pieces
 
 
@@ -649,7 +708,7 @@ def extract_pieces(path, size_layer=None):
             piece.page = number
             _option_regions(piece, parts, texts)
             pieces.append(piece)
-    return _drop_common_title(pieces)
+    return _drop_common_title(_drop_unmarked(pieces))
 
 
 def _option_regions(piece, parts, texts):
@@ -664,6 +723,22 @@ def _option_regions(piece, parts, texts):
         piece.region_labels.append(" ".join(words)[:60])
 
 
+NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4}
+
+
+def _long_axis(poly):
+    """Direction of a piece's longest side of its smallest enclosing rectangle, degrees."""
+    ring = list(poly.minimum_rotated_rectangle.exterior.coords)
+    (ax, ay), (bx, by) = max(zip(ring, ring[1:]), key=lambda e: math.dist(*e))
+    return math.degrees(math.atan2(by - ay, bx - ax))
+
+
+def _drop_unmarked(pieces):
+    """Where most pieces say how many to cut, a region that says nothing (a logo, a notes box) is not a piece."""
+    marked = [p for p in pieces if p.cut_marked]
+    return marked if len(marked) * 2 > len(pieces) else pieces
+
+
 def _drop_common_title(pieces):
     """Remove the pattern title that starts most piece names ('Fog Tee Sleeve' -> 'Sleeve'), and shorten names."""
     names = [p.name for p in pieces if p.name != "piece"]
@@ -676,7 +751,9 @@ def _drop_common_title(pieces):
                 title = phrase
     for p in pieces:
         shorter = " ".join(p.name.replace(title, " ").split()).strip(" .,:") if title else p.name
-        p.name = (shorter or p.name)[:50]
+        p.name = shorter or p.name
+    for p in pieces:
+        p.name = p.name[:50]
     return pieces
 
 
