@@ -379,12 +379,13 @@ def _key(geom):
 
 
 def sheet_lines(doc, sheet, size):
-    """Stroked lines of a sheet belonging to a size (see selector), mm, and the widest stroke.
+    """Stroked lines of a sheet belonging to a size (see selector), mm, and the width of the cutting lines.
 
     A size 'label:<size>' keeps the lines labelled with that size (or a range holding it),
     and every line with no size label."""
     wanted = selector(None if size and size.startswith("label:") else size)
-    lines, stroke, seen = [], 0.0, set()
+    lines, seen = [], set()
+    width_length = Counter()  # total length of line drawn at each stroke width
     for number, dx, dy in sheet:
         page_w, page_h = doc[number].rect.width * MM_PER_PT, doc[number].rect.height * MM_PER_PT
         labels = _size_labels(doc[number]) if size and size.startswith("label:") else {}
@@ -399,7 +400,9 @@ def sheet_lines(doc, sheet, size):
                     if _key(line) not in seen:  # tiles repeat paths that cross them
                         seen.add(_key(line))
                         lines.append(line)
-                stroke = max(stroke, (d.get("width") or 0) * MM_PER_PT)
+                        width_length[round((d.get("width") or 0) * MM_PER_PT, 2)] += line.length
+    # the cutting lines are most of the line drawn; thick lettering or logos must not set the width
+    stroke = width_length.most_common(1)[0][0] if width_length else 0.0
     return lines, stroke
 
 
