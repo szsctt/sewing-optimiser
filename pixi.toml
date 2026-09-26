@@ -9,6 +9,7 @@ version = "0.1.0"
 layout = "python -m sewing_optimiser.cli"
 test = "python -m pytest"
 app = "python -m sewing_optimiser.server"
+widths = "python -m sewing_optimiser.widths"
 demo = "python demo/make_sample_pattern.py && python -m demo.record_demo"
 
 [dependencies]

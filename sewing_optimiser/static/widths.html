@@ -1,0 +1,110 @@
+<title>Fabric Needed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #f2f3ef; --surface: #ffffff; --ink: #1d2427; --muted: #5e6a6e; --rule: #d5d9d2;
+    --accent: #e3b505; --accent-ink: #1d2427; --piece: #1d2427; --fabric: #e9ebe5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121618; --surface: #1b2124; --ink: #e7eae4; --muted: #98a3a6; --rule: #2c3438;
+      --accent: #f0c43a; --accent-ink: #121618; --piece: #e7eae4; --fabric: #232a2e;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121618; --surface: #1b2124; --ink: #e7eae4; --muted: #98a3a6; --rule: #2c3438;
+    --accent: #f0c43a; --accent-ink: #121618; --piece: #e7eae4; --fabric: #232a2e;
+  }
+  body { background: var(--bg); color: var(--ink); font: 16px/1.45 "Barlow", system-ui, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 20px; }
+  h1 { font: 700 30px/1.1 "Barlow Condensed", "Arial Narrow", sans-serif; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+  .lede { color: var(--muted); margin: 4px 0 0; }
+  label.field { display: grid; gap: 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  select { font: 500 17px "Barlow", system-ui, sans-serif; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; width: 100%; }
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+  .chip { flex: none; font: 600 18px "Barlow Condensed", "Arial Narrow", sans-serif; font-variant-numeric: tabular-nums;
+    border: 1px solid var(--rule); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .chip:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .answer { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
+  .buy { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .buy b { font: 700 56px/1 "Barlow Condensed", "Arial Narrow", sans-serif; font-variant-numeric: tabular-nums; }
+  .buy span { color: var(--muted); }
+  .extra { display: grid; gap: 4px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pic { overflow-x: auto; }
+  .pic svg { display: block; width: 100%; max-width: 100%; height: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--rule); }
+  th { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 500; }
+  td.num { font: 600 19px "Barlow Condensed", "Arial Narrow", sans-serif; }
+  tr.on td { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  details summary { cursor: pointer; color: var(--muted); }
+  details ul { margin: 8px 0 0; padding-left: 20px; }
+  .note { color: var(--muted); font-size: 14px; }
+</style>
+
+<main>
+  <header>
+    <h1>Fabric needed</h1>
+    <p class="lede">How much to buy for each saved pattern, by the width of the bolt.</p>
+  </header>
+  <label class="field" for="pattern">Pattern and size<select id="pattern"></select></label>
+  <div>
+    <div class="field" style="margin-bottom:6px">Bolt width (cm)</div>
+    <div class="chips" id="chips" role="group" aria-label="Bolt width"></div>
+  </div>
+  <section class="answer" aria-live="polite">
+    <div class="buy"><b id="buy"></b><span id="exact"></span></div>
+    <div class="extra" id="extra"></div>
+    <div class="pic" id="pic"></div>
+  </section>
+  <section>
+    <table><thead><tr><th>Width</th><th>Buy</th><th>Laid out</th></tr></thead><tbody id="rows"></tbody></table>
+  </section>
+  <details><summary>Pieces included</summary><ul id="pieces"></ul></details>
+  <p class="note" id="made"></p>
+</main>
+
+<script>
+const DATA = /*DATA*/null;
+const $ = id => document.getElementById(id);
+const buy = mm => (Math.ceil(mm / 100) / 10).toFixed(1) + ' m';  // shops cut to the next 10 cm
+const remember = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const recall = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+let pick = 0, width = 1500;
+
+function mainOf(layouts) { return layouts.find(l => l.fabric === 'main') || layouts[0]; }
+
+function render() {
+  const p = DATA.patterns[pick];
+  const widths = DATA.widths.filter(w => p.widths[w]);
+  if (!p.widths[width]) width = widths[widths.length - 1];
+  $('chips').innerHTML = widths.map(w => `<button class="chip" aria-pressed="${w === width}" data-w="${w}">${w / 10}</button>`).join('');
+  $('chips').querySelectorAll('button').forEach(b => b.onclick = () => { width = +b.dataset.w; remember('width', width); render(); });
+  const layouts = p.widths[width], main = mainOf(layouts);
+  $('buy').textContent = buy(main.length);
+  $('exact').textContent = `of ${width / 10} cm ${main.fabric === 'main' ? 'fabric' : main.fabric} (laid out ${main.length} mm)`;
+  $('extra').innerHTML = layouts.filter(l => l !== main).map(l => `<div>Plus ${buy(l.length)} of ${width / 10} cm ${l.fabric}</div>`).join('');
+  const t = main.thumb;
+  $('pic').innerHTML = `<svg viewBox="-2 -2 ${t.w + 4} ${t.h + 4}" width="${t.w + 4}" height="${t.h + 4}" role="img" aria-label="Layout on ${width / 10} cm fabric">
+    <rect x="0" y="0" width="${t.w}" height="${t.h}" fill="var(--fabric)"/>
+    <path d="${t.d}" fill="none" stroke="var(--piece)" stroke-width="1"/></svg>`;
+  $('rows').innerHTML = widths.map(w => {
+    const m = mainOf(p.widths[w]);
+    return `<tr class="${w === width ? 'on' : ''}"><td class="num">${w / 10} cm</td><td class="num">${buy(m.length)}</td><td>${m.length} mm</td></tr>`;
+  }).join('');
+  $('pieces').innerHTML = p.pieces.map(x => `<li>${x}</li>`).join('');
+}
+
+$('pattern').innerHTML = DATA.patterns.map((p, i) => `<option value="${i}">${p.name}</option>`).join('');
+pick = Math.min(+(recall('pattern') || 0), DATA.patterns.length - 1);
+width = +(recall('width') || 1500);
+$('pattern').value = pick;
+$('pattern').onchange = () => { pick = +$('pattern').value; remember('pattern', pick); render(); };
+$('made').textContent = `Worked out on ${DATA.made} from the choices saved in the pattern layout app. Lengths assume single-layer cutting and the piece settings saved there.`;
+render();
+</script>

@@ -21,6 +21,12 @@ Then open http://localhost:8000.
 
 Choices are saved per pattern and size in `projects/`.
 
+## Fabric needed, on a phone
+
+    pixi run widths
+
+Lays out every saved pattern at common bolt widths (90–160 cm, shortest length) and writes `output/fabric-needed.html`: how much to buy at each width, with the layout, for checking in a fabric shop. Publish or copy it to your phone.
+
 ## Command line
 
     pixi run layout "examples/Cuff leggings/bt12-BW-projector-pattern.pdf"                       # list layers
