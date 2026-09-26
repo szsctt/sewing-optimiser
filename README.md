@@ -2,6 +2,10 @@
 
 Lays out sewing pattern pieces on fabric to use as little fabric as possible, and projects the layout onto the fabric at 1:1.
 
+![Demo: reading a pattern, choosing a cutting option, laying out and projecting](demo/demo.gif)
+
+[Full-size video](demo/demo.mp4). The demo uses `demo/sample-pattern.pdf`, a made-up T-shirt pattern with two sizes on PDF layers; `pixi run demo` rebuilds it and records the video again in Google Chrome.
+
 ## App
 
     pixi run app
