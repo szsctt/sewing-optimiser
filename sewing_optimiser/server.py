@@ -16,7 +16,7 @@ from . import project as proj
 from .layout import _align, make_layouts
 from .nest import Stripes
 from .output import layout_svg, write_pdf
-from .pdf_import import MM_PER_PT, _reflect, faces, list_sizes, sheet_lines, sheets_of
+from .pdf_import import MM_PER_PT, PICK_MIN_AREA, _reflect, faces, list_sizes, sheet_lines, sheets_of
 
 ROOT = Path(__file__).parent.parent
 EXAMPLES = ROOT / "examples"
@@ -98,7 +98,7 @@ def page_png(pdf: str, page: int = 0, dpi: int = 12):
 @app.get("/api/faces")
 def page_faces(pdf: str, page: int = 0, layers: str = ""):
     doc = pymupdf.open(_pdf(pdf))
-    found = faces(sheet_lines(doc, sheets_of(_pdf(pdf))[page], layers or None)[0])
+    found = faces(sheet_lines(doc, sheets_of(_pdf(pdf))[page], layers or None)[0], PICK_MIN_AREA)
     # a region between two nested size lines has the inner region as a hole, so each click hits one region
     found.sort(key=lambda f: -f.area)
     return [{"d": _path_d(f), "at": list(f.representative_point().coords[0])} for f in found[:2000]]
@@ -160,6 +160,20 @@ def _laid_out(pieces, settings):
         "fold_width": l.fold_width, "utilisation": l.utilisation, "compactness": l.compactness, "notes": l.notes,
         "flat_width": l.flat_width,
     } for l in layouts]
+
+
+@app.post("/api/overlay")
+def overlay(project: dict):
+    """The pieces found, drawn where they are on the pattern's sheets (page mm), for checking by eye."""
+    out = []
+    for i, p in enumerate(proj.pieces(_abs(project))):
+        if p.source is None or p.page is None:
+            continue  # added rectangles and joined pieces have no place on a sheet
+        drawn = p.half if p.half is not None else p.outline
+        out.append({"index": i, "name": p.name, "sheet": p.page, "d": _path_d(drawn),
+                    "full": _path_d(p.outline) if p.half is not None else None,
+                    "marks": "".join("M" + "L".join(f"{x:.1f},{y:.1f}" for x, y in m.coords) for m in p.marks.geoms)})
+    return out
 
 
 @app.post("/api/layout")

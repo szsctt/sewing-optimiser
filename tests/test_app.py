@@ -97,3 +97,10 @@ def test_combined_layout(client):
     [layout] = client.post("/api/combined/layout", json=cuff["fabric"]).json()
     assert "Cuff leggings 2-3t: LEFT LEG" in layout["svg"] and "Ringer tee 2-3t: BACK" in layout["svg"]
     assert len(client.post("/api/combined/remove", params={"i": 0}).json()) == 1
+
+
+def test_overlay_shows_pieces_on_their_sheet(client):
+    p, pieces = load(client, CUFF, "2-3t")
+    drawn = client.post("/api/overlay", json=p).json()
+    assert sorted(o["name"] for o in drawn) == sorted(x["name"] for x in pieces)
+    assert all(o["sheet"] == 0 and o["d"].startswith("M") for o in drawn)

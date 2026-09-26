@@ -64,7 +64,14 @@
 
   <section id="pieces-section" class="hidden">
     <h2>Pieces</h2>
-    <p class="muted">Untick option pieces you are not making. Pictures are turned so the grainline runs down the page.</p>
+    <p class="muted">Untick option pieces you are not making. Pictures are turned so the grainline runs down the page.
+      <button id="check-btn">Check against the pattern</button></p>
+    <div id="check" class="hidden">
+      <p class="muted">Each piece found is drawn in colour over the pattern sheet (dashed: the whole of a piece cut on the fold,
+        short ticks: notches). A part of the pattern with no colour over it was missed; fix it by picking pieces by hand.</p>
+      <div class="row"><label>Sheet <select id="check-sheet"></select></label><button id="check-close">Close</button></div>
+      <div id="check-view"></div>
+    </div>
     <p class="muted">Click a piece's picture to open it large, to set its stripe match line or lengthen line,
       or to choose between cutting options (parts shown dashed).</p>
     <table><thead><tr><th>Use</th><th>Piece</th><th>Name</th><th>Copies</th><th>Fabric</th><th>Grainline</th>
@@ -321,6 +328,38 @@ $('r-add').onclick = async () => {
   project.rectangles = [...(project.rectangles || []), {name: $('r-name').value || 'rectangle', width: w, length: l, copies: +$('r-n').value || 1}];
   await loadPieces();
 };
+
+/* ---------- pieces drawn over the pattern sheet ---------- */
+let overlay = [];
+$('check-btn').onclick = async () => {
+  overlay = await api('/api/overlay', collect());
+  const info = await api('/api/info?pdf=' + encodeURIComponent(project.pdf));
+  const sheets = [...new Set(overlay.map(o => o.sheet))].sort((a, b) => a - b);
+  $('check-sheet').innerHTML = sheets.map(n => `<option value="${n}">${n + 1}</option>`).join('');
+  $('check-sheet').onchange = () => drawCheck(info);
+  $('check').classList.remove('hidden');
+  drawCheck(info);
+};
+$('check-close').onclick = () => $('check').classList.add('hidden');
+function drawCheck(info) {
+  const n = +$('check-sheet').value, {x, y, w, h} = info.pages[n];
+  const pdf = encodeURIComponent(project.pdf);
+  const here = overlay.filter(o => o.sheet === n);
+  $('check-view').innerHTML = `<svg viewBox="${x} ${y} ${w} ${h}" style="width:100%;max-height:85vh;background:#fff">
+    <image href="/api/page.png?pdf=${pdf}&page=${n}&dpi=40" x="${x}" y="${y}" width="${w}" height="${h}" opacity="0.6"/>
+    ${here.map((o, k) => {
+      const colour = `hsl(${(k * 137) % 360} 80% 45%)`;
+      return `<g><title>${o.name}</title>
+        <path d="${o.d}" fill="${colour}" fill-opacity="0.18" stroke="${colour}" stroke-width="1.5"/>
+        ${o.full ? `<path d="${o.full}" fill="none" stroke="${colour}" stroke-width="1" stroke-dasharray="6 4"/>` : ''}
+        ${o.marks ? `<path d="${o.marks}" fill="none" stroke="${colour}" stroke-width="2"/>` : ''}
+        <text data-name="${k}" font-size="${Math.max(w, h) / 80}" fill="${colour}" font-weight="bold">${o.name}</text></g>`;
+    }).join('')}</svg>`;
+  $('check-view').querySelectorAll('g').forEach(g => {  // name at the middle of each piece
+    const box = g.querySelector('path').getBBox(), t = g.querySelector('text');
+    t.setAttribute('x', box.x + box.width / 2); t.setAttribute('y', box.y + box.height / 2); t.setAttribute('text-anchor', 'middle');
+  });
+}
 
 /* ---------- large view of one piece ---------- */
 let editing = null;

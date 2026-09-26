@@ -487,12 +487,15 @@ def _regions(lines, gap=GAP_CLOSE):
     return plain + bridged
 
 
-def faces(lines):
-    """Every closed region the lines form, with its holes (for picking pieces by hand)."""
+PICK_MIN_AREA = 20  # mm²; regions this small can still be picked by hand (thin strips between sizes)
+
+
+def faces(lines, min_area=MIN_PIECE_AREA):
+    """Every closed region the lines form, with its holes."""
     found, seen = [], set()
     for f in _regions(lines):
         key = tuple(round(v) for v in f.bounds) + (round(f.area),)
-        if f.area > MIN_PIECE_AREA and key not in seen:
+        if f.area > min_area and key not in seen:
             seen.add(key)
             found.append(f)
     return found
@@ -506,7 +509,7 @@ def picked_outlines(lines, stroke, points):
     are strips that enclose nothing, so each strip from the smallest size
     out to the chosen one has to be clicked.
     """
-    regions = faces(lines)
+    regions = faces(lines, PICK_MIN_AREA)
     chosen = [r for r in regions if any(r.contains(Point(p)) for p in points)]
     merged = unary_union([r.buffer(JOIN_GAP) for r in chosen]).buffer(-JOIN_GAP - stroke / 2)
     return [Polygon(g.exterior) for g in getattr(merged, "geoms", [merged]) if not g.is_empty]

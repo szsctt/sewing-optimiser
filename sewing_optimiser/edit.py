@@ -75,13 +75,13 @@ def join(upper, lower):
     marks = MultiLineString(list(ma.geoms) + list(mb.geoms))
     name = f"{upper.name} + {lower.name}"
     if not folded:
-        return replace(upper, name=name, outline=shape, marks=marks, grain_deg=90.0)
+        return replace(upper, name=name, outline=shape, marks=marks, grain_deg=90.0, page=None)  # no longer on a sheet
     fold_x = end_a[0]
     _, miny, _, maxy = shape.bounds
     edge = ((fold_x, miny), (fold_x, maxy))
     full, both = _unfold(shape, marks, edge)
     return replace(upper, name=name, outline=full, marks=both, grain_deg=90.0, half=shape, half_marks=marks,
-                   fold_edge=edge)
+                   fold_edge=edge, page=None)
 
 
 def trim(piece, indices):
