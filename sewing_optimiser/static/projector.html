@@ -140,7 +140,7 @@ async function render() {
   const stage = $('stage');
   stage.style.transform = mmToScreen();
   stage.innerHTML = mode === 'cal' ? grid() : mode === 'check' ? checkSquare() : await layout();
-  document.body.style.background = mode === 'layout' && !$('inverted').checked ? '#fff' : '#000';
+  document.body.style.background = $('inverted').checked ? '#000' : '#fff';  // every step
   $('handles').innerHTML = mode === 'cal' ? cal.corners.map((c, i) => `<div class="handle" data-i="${i}" style="left:${c[0]}px;top:${c[1]}px"></div>`).join('') : '';
   document.querySelectorAll('.handle').forEach(dragHandle);
 }
@@ -156,7 +156,8 @@ function dragHandle(el) {
 // a line colour for each step (calibrate, check square, layout); white unless chosen
 cal.colours = cal.colours || {};
 delete cal.colour;
-const colour = step => cal.colours[step] || '#ffffff';
+// unless chosen, lines are white on the dark background and black on the light one
+const colour = step => cal.colours[step] || ($('inverted').checked ? '#ffffff' : '#000000');
 const step = () => $('mode').value;
 function showColour() {
   $('linecolour').value = colour(step());
@@ -164,6 +165,7 @@ function showColour() {
 }
 $('linecolour').onchange = () => { cal.colours[step()] = $('linecolour').value; save(); showColour(); render(); };
 $('mode').addEventListener('change', showColour);
+$('inverted').addEventListener('change', showColour);
 showColour();
 if (cal.k === undefined) cal.k = 100 / (cal.measured || 100);  // calibrations saved before units
 cal.units = cal.units || 'cm';
