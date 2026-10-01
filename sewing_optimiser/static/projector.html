@@ -23,19 +23,20 @@
 <div id="panel">
   <h2>Projector</h2>
   <p>H hides this panel. Arrow keys move the layout 100 mm (Shift: 10 mm) to project it in sections. Click the projected area first if a box in this panel is selected.</p>
-  <label>Mode <select id="mode"><option value="cal">1. Calibrate</option><option value="check">2. Check 10 cm square</option><option value="layout">3. Layout</option></select></label>
+  <label>Units <select id="units"><option value="cm">cm</option><option value="in">inches</option></select></label>
+  <label>Mode <select id="mode"><option value="cal">1. Calibrate</option><option value="check">2. Check square</option><option value="layout">3. Layout</option></select></label>
   <div id="cal-help">
-    <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four coloured handles until the projected rectangle's corners sit on its corners. The grid lines are 100 mm apart.</p>
-    <label>Rectangle width (mm) <input type="number" id="rw" value="600"></label>
-    <label>Rectangle height (mm) <input type="number" id="rh" value="400"></label>
+    <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four coloured handles until the projected rectangle's corners sit on its corners. The grid lines are <span class="grid-step"></span> apart.</p>
+    <label><span>Rectangle width (<span class="unit"></span>)</span> <input type="number" id="rw" step="0.5"></label>
+    <label><span>Rectangle height (<span class="unit"></span>)</span> <input type="number" id="rh" step="0.5"></label>
     <label>Calibration colour <select id="calcolour">
       <option value="#ff3df0">magenta (for a green mat)</option><option value="#ffe600">yellow</option>
       <option value="#ffffff">white</option><option value="#ff3b30">red</option><option value="#00e5ff">cyan</option>
       <option value="#00ff00">green</option></select></label>
   </div>
   <div id="check-help" class="hidden">
-    <p>Measure the projected square. If it is not 100 mm, enter what you measure and the scale is corrected.</p>
-    <label>Measured side (mm) <input type="number" id="measured" value="100" step="0.5"></label>
+    <p>Measure the projected square. If it is not <span class="square"></span>, enter what you measure and the scale is corrected.</p>
+    <label><span>Measured side (<span class="unit"></span>)</span> <input type="number" id="measured" step="0.05"></label>
   </div>
   <label>Light lines on dark <input type="checkbox" id="inverted" checked></label>
   <label>Line width <input type="range" id="lw" min="0.3" max="6" step="0.1" value="2.5"></label>
@@ -51,9 +52,10 @@ const KEY = 'projector-calibration';
 let cal = load() || defaults();
 let layoutSvg = null;
 
-function defaults() {
+function defaults(prev) {
   const w = innerWidth, h = innerHeight;
-  return {rw: 600, rh: 400, corners: [[w * 0.2, h * 0.2], [w * 0.8, h * 0.2], [w * 0.8, h * 0.8], [w * 0.2, h * 0.8]], measured: 100};
+  return {rw: 600, rh: 400, corners: [[w * 0.2, h * 0.2], [w * 0.8, h * 0.2], [w * 0.8, h * 0.8], [w * 0.2, h * 0.8]], k: 1,
+          units: prev?.units || 'cm', colour: prev?.colour || '#ff3df0'};
 }
 function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(cal)); } catch {} }
@@ -80,7 +82,7 @@ function mmToScreen() {
   const rw = cal.rw, rh = cal.rh;
   const H = homography([[0, 0], [rw, 0], [rw, rh], [0, rh]], cal.corners);
   // correction scales about the rectangle's centre, applied before the homography
-  const k = 100 / (cal.measured || 100);
+  const k = cal.k || 1;
   const pre = [k, 0, (1 - k) * rw / 2, 0, k, (1 - k) * rh / 2, 0, 0, 1];
   const m = mul(H, pre);
   return `matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
@@ -91,20 +93,27 @@ function mul(a, b) {
   return r;
 }
 
+// everything is drawn in mm; the units only change what is typed and shown
+const UNITS = {cm: {mm: 10, name: 'cm', grid: 100, square: 100, label: '10 cm'},
+               in: {mm: 25.4, name: 'in', grid: 50.8, square: 101.6, label: '4 inches'}};
+const unit = () => UNITS[cal.units || 'cm'];
+
 function grid() {
-  const {rw, rh} = cal, lines = [];
-  for (let x = -1000; x <= rw + 1000; x += 100) lines.push(`<line x1="${x}" y1="-1000" x2="${x}" y2="${rh + 1000}"/>`);
-  for (let y = -1000; y <= rh + 1000; y += 100) lines.push(`<line x1="-1000" y1="${y}" x2="${rw + 1000}" y2="${y}"/>`);
+  const {rw, rh} = cal, lines = [], step = unit().grid;
+  for (let x = -20 * step; x <= rw + 20 * step; x += step) lines.push(`<line x1="${x}" y1="-1000" x2="${x}" y2="${rh + 1000}"/>`);
+  for (let y = -20 * step; y <= rh + 20 * step; y += step) lines.push(`<line x1="-1000" y1="${y}" x2="${rw + 1000}" y2="${y}"/>`);
   return `<svg width="${rw + 2000}" height="${rh + 2000}" viewBox="-1000 -1000 ${rw + 2000} ${rh + 2000}" style="position:absolute;left:-1000px;top:-1000px;overflow:visible">
     <g stroke="${cal.colour}" stroke-opacity="0.5" stroke-width="${0.6 * $('lw').value}">${lines.join('')}</g>
     <rect x="0" y="0" width="${rw}" height="${rh}" fill="none" stroke="${cal.colour}" stroke-width="${1.2 * $('lw').value}"/></svg>`;
 }
 
 function checkSquare() {
-  const {rw, rh} = cal;
+  const {rw, rh} = cal, side = unit().square, lw = $('lw').value;
+  const x = rw / 2 - side / 2, y = rh / 2 - side / 2;
+  // a bold square with ticks at its corners, in the calibration colour, so it shows on a mat
   return `<svg width="${rw}" height="${rh}" style="position:absolute;left:0;top:0;overflow:visible">
-    <rect x="${rw / 2 - 50}" y="${rh / 2 - 50}" width="100" height="100" fill="none" stroke="#fff" stroke-width="1"/>
-    <text x="${rw / 2}" y="${rh / 2 + 70}" fill="#fff" font-size="8" text-anchor="middle">100 mm</text></svg>`;
+    <rect x="${x}" y="${y}" width="${side}" height="${side}" fill="${cal.colour}" fill-opacity="0.15" stroke="${cal.colour}" stroke-width="${1.2 * lw}"/>
+    <text x="${rw / 2}" y="${y + side + 16}" fill="${cal.colour}" font-size="12" font-weight="bold" text-anchor="middle">${unit().label}</text></svg>`;
 }
 
 async function layout() {
@@ -149,11 +158,25 @@ $('calcolour').onchange = () => {
   document.documentElement.style.setProperty('--cal', cal.colour);
   render();
 };
-$('rw').value = cal.rw; $('rh').value = cal.rh; $('measured').value = cal.measured || 100;
-$('rw').onchange = () => { cal.rw = +$('rw').value; save(); render(); };
-$('rh').onchange = () => { cal.rh = +$('rh').value; save(); render(); };
-$('measured').onchange = () => { cal.measured = +$('measured').value; save(); render(); };
-$('reset').onclick = () => { cal = defaults(); save(); render(); };
+if (cal.k === undefined) cal.k = 100 / (cal.measured || 100);  // calibrations saved before units
+cal.units = cal.units || 'cm';
+const round = v => Math.round(v * 100) / 100;
+function showUnits() {
+  const u = unit();
+  $('units').value = cal.units;
+  document.querySelectorAll('.unit').forEach(el => el.textContent = u.name);
+  document.querySelectorAll('.grid-step').forEach(el => el.textContent = cal.units === 'cm' ? '10 cm' : '2 inches');
+  document.querySelectorAll('.square').forEach(el => el.textContent = u.label);
+  $('mode').options[1].textContent = cal.units === 'cm' ? '2. Check 10 cm square' : '2. Check 4-inch square';
+  $('rw').value = round(cal.rw / u.mm); $('rh').value = round(cal.rh / u.mm);
+  $('measured').value = round(u.square / cal.k / u.mm);
+}
+$('units').onchange = () => { cal.units = $('units').value; save(); showUnits(); render(); };
+$('rw').onchange = () => { cal.rw = +$('rw').value * unit().mm; save(); render(); };
+$('rh').onchange = () => { cal.rh = +$('rh').value * unit().mm; save(); render(); };
+$('measured').onchange = () => { cal.k = unit().square / (+$('measured').value * unit().mm); save(); render(); };
+$('reset').onclick = () => { cal = defaults(cal); save(); showUnits(); render(); };
+showUnits();
 ['mode', 'inverted', 'lw', 'offx', 'offy'].forEach(id => $(id).onchange = render);
 // after using a control, give the keys back to the page (a focused list would take the arrow keys)
 document.querySelectorAll('#panel select, #panel input[type=checkbox], #panel input[type=range]')
