@@ -12,7 +12,8 @@
   #panel input[type=number] { width: 80px; }
   #panel button { margin: 4px 4px 0 0; }
   #panel p { color: #aaa; margin: 6px 0; font-size: 12px; }
-  .handle { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 2px solid #0f0; border-radius: 50%; cursor: move; }
+  :root { --cal: #ff3df0; }
+  .handle { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 3px solid var(--cal); border-radius: 50%; cursor: move; }
   .hidden { display: none; }
 </style>
 </head>
@@ -24,9 +25,13 @@
   <p>H hides this panel. Arrow keys move the layout 100 mm (Shift: 10 mm) to project it in sections. Click the projected area first if a box in this panel is selected.</p>
   <label>Mode <select id="mode"><option value="cal">1. Calibrate</option><option value="check">2. Check 10 cm square</option><option value="layout">3. Layout</option></select></label>
   <div id="cal-help">
-    <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four green handles until the projected rectangle's corners sit on its corners. The grid lines are 100 mm apart.</p>
+    <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four coloured handles until the projected rectangle's corners sit on its corners. The grid lines are 100 mm apart.</p>
     <label>Rectangle width (mm) <input type="number" id="rw" value="600"></label>
     <label>Rectangle height (mm) <input type="number" id="rh" value="400"></label>
+    <label>Calibration colour <select id="calcolour">
+      <option value="#ff3df0">magenta (for a green mat)</option><option value="#ffe600">yellow</option>
+      <option value="#ffffff">white</option><option value="#ff3b30">red</option><option value="#00e5ff">cyan</option>
+      <option value="#00ff00">green</option></select></label>
   </div>
   <div id="check-help" class="hidden">
     <p>Measure the projected square. If it is not 100 mm, enter what you measure and the scale is corrected.</p>
@@ -91,8 +96,8 @@ function grid() {
   for (let x = -1000; x <= rw + 1000; x += 100) lines.push(`<line x1="${x}" y1="-1000" x2="${x}" y2="${rh + 1000}"/>`);
   for (let y = -1000; y <= rh + 1000; y += 100) lines.push(`<line x1="-1000" y1="${y}" x2="${rw + 1000}" y2="${y}"/>`);
   return `<svg width="${rw + 2000}" height="${rh + 2000}" viewBox="-1000 -1000 ${rw + 2000} ${rh + 2000}" style="position:absolute;left:-1000px;top:-1000px;overflow:visible">
-    <g stroke="#555" stroke-width="0.6">${lines.join('')}</g>
-    <rect x="0" y="0" width="${rw}" height="${rh}" fill="none" stroke="#0f0" stroke-width="1.2"/></svg>`;
+    <g stroke="${cal.colour}" stroke-opacity="0.5" stroke-width="${0.6 * $('lw').value}">${lines.join('')}</g>
+    <rect x="0" y="0" width="${rw}" height="${rh}" fill="none" stroke="${cal.colour}" stroke-width="${1.2 * $('lw').value}"/></svg>`;
 }
 
 function checkSquare() {
@@ -136,6 +141,14 @@ function dragHandle(el) {
   };
 }
 
+cal.colour = cal.colour || '#ff3df0';
+$('calcolour').value = cal.colour;
+document.documentElement.style.setProperty('--cal', cal.colour);
+$('calcolour').onchange = () => {
+  cal.colour = $('calcolour').value; save();
+  document.documentElement.style.setProperty('--cal', cal.colour);
+  render();
+};
 $('rw').value = cal.rw; $('rh').value = cal.rh; $('measured').value = cal.measured || 100;
 $('rw').onchange = () => { cal.rw = +$('rw').value; save(); render(); };
 $('rh').onchange = () => { cal.rh = +$('rh').value; save(); render(); };
