@@ -12,7 +12,7 @@
   #panel input[type=number] { width: 80px; }
   #panel button { margin: 4px 4px 0 0; }
   #panel p { color: #aaa; margin: 6px 0; font-size: 12px; }
-  :root { --cal: #ff3df0; }
+  :root { --cal: #ffffff; }
   .handle { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 3px solid var(--cal); border-radius: 50%; cursor: move; }
   .hidden { display: none; }
 </style>
@@ -29,16 +29,16 @@
     <p>Lay a cutting mat or tape under the projector. Enter the size of a rectangle you can see on it, then drag the four coloured handles until the projected rectangle's corners sit on its corners. The grid lines are <span class="grid-step"></span> apart.</p>
     <label><span>Rectangle width (<span class="unit"></span>)</span> <input type="number" id="rw" step="0.5"></label>
     <label><span>Rectangle height (<span class="unit"></span>)</span> <input type="number" id="rh" step="0.5"></label>
-    <label>Calibration colour <select id="calcolour">
-      <option value="#ff3df0">magenta (for a green mat)</option><option value="#ffe600">yellow</option>
-      <option value="#ffffff">white</option><option value="#ff3b30">red</option><option value="#00e5ff">cyan</option>
-      <option value="#00ff00">green</option></select></label>
   </div>
   <div id="check-help" class="hidden">
     <p>Measure the projected square. If it is not <span class="square"></span>, enter what you measure and the scale is corrected.</p>
     <label><span>Measured side (<span class="unit"></span>)</span> <input type="number" id="measured" step="0.05"></label>
   </div>
-  <label>Light lines on dark <input type="checkbox" id="inverted" checked></label>
+  <label>Line colour for this step <select id="linecolour">
+    <option value="#ffffff">white</option><option value="#ff3df0">magenta (shows on a green mat)</option>
+    <option value="#ffe600">yellow</option><option value="#ff3b30">red</option><option value="#00e5ff">cyan</option>
+    <option value="#00ff00">green</option><option value="#000000">black</option></select></label>
+  <label>Dark background <input type="checkbox" id="inverted" checked></label>
   <label>Line width <input type="range" id="lw" min="0.3" max="6" step="0.1" value="2.5"></label>
   <label>Offset along length (mm) <input type="number" id="offy" value="0" step="100"></label>
   <label>Offset across (mm) <input type="number" id="offx" value="0" step="100"></label>
@@ -55,7 +55,7 @@ let layoutSvg = null;
 function defaults(prev) {
   const w = innerWidth, h = innerHeight;
   return {rw: 600, rh: 400, corners: [[w * 0.2, h * 0.2], [w * 0.8, h * 0.2], [w * 0.8, h * 0.8], [w * 0.2, h * 0.8]], k: 1,
-          units: prev?.units || 'cm', colour: prev?.colour || '#ff3df0'};
+          units: prev?.units || 'cm', colours: prev?.colours || {}};
 }
 function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(cal)); } catch {} }
@@ -103,8 +103,8 @@ function grid() {
   for (let x = -20 * step; x <= rw + 20 * step; x += step) lines.push(`<line x1="${x}" y1="-1000" x2="${x}" y2="${rh + 1000}"/>`);
   for (let y = -20 * step; y <= rh + 20 * step; y += step) lines.push(`<line x1="-1000" y1="${y}" x2="${rw + 1000}" y2="${y}"/>`);
   return `<svg width="${rw + 2000}" height="${rh + 2000}" viewBox="-1000 -1000 ${rw + 2000} ${rh + 2000}" style="position:absolute;left:-1000px;top:-1000px;overflow:visible">
-    <g stroke="${cal.colour}" stroke-opacity="0.5" stroke-width="${0.6 * $('lw').value}">${lines.join('')}</g>
-    <rect x="0" y="0" width="${rw}" height="${rh}" fill="none" stroke="${cal.colour}" stroke-width="${1.2 * $('lw').value}"/></svg>`;
+    <g stroke="${colour('cal')}" stroke-opacity="0.5" stroke-width="${0.6 * $('lw').value}">${lines.join('')}</g>
+    <rect x="0" y="0" width="${rw}" height="${rh}" fill="none" stroke="${colour('cal')}" stroke-width="${1.2 * $('lw').value}"/></svg>`;
 }
 
 function checkSquare() {
@@ -112,8 +112,8 @@ function checkSquare() {
   const x = rw / 2 - side / 2, y = rh / 2 - side / 2;
   // a bold square with ticks at its corners, in the calibration colour, so it shows on a mat
   return `<svg width="${rw}" height="${rh}" style="position:absolute;left:0;top:0;overflow:visible">
-    <rect x="${x}" y="${y}" width="${side}" height="${side}" fill="${cal.colour}" fill-opacity="0.15" stroke="${cal.colour}" stroke-width="${1.2 * lw}"/>
-    <text x="${rw / 2}" y="${y + side + 16}" fill="${cal.colour}" font-size="12" font-weight="bold" text-anchor="middle">${unit().label}</text></svg>`;
+    <rect x="${x}" y="${y}" width="${side}" height="${side}" fill="${colour('check')}" fill-opacity="0.15" stroke="${colour('check')}" stroke-width="${1.2 * lw}"/>
+    <text x="${rw / 2}" y="${y + side + 16}" fill="${colour('check')}" font-size="12" font-weight="bold" text-anchor="middle">${unit().label}</text></svg>`;
 }
 
 async function layout() {
@@ -127,6 +127,9 @@ async function layout() {
   doc.style.left = (x0 - +$('offx').value) + 'px'; doc.style.top = (y0 - +$('offy').value) + 'px';
   doc.style.overflow = 'visible';
   doc.querySelectorAll('[stroke-width]').forEach(el => el.setAttribute('stroke-width', el.getAttribute('stroke-width') * $('lw').value));
+  const c = colour('layout');  // lines, labels and the folded-strip tint in the chosen colour
+  doc.querySelector('g').setAttribute('stroke', c);
+  doc.querySelectorAll('text, [fill-opacity]').forEach(el => el.setAttribute('fill', c));
   return doc.outerHTML;
 }
 
@@ -150,14 +153,18 @@ function dragHandle(el) {
   };
 }
 
-cal.colour = cal.colour || '#ff3df0';
-$('calcolour').value = cal.colour;
-document.documentElement.style.setProperty('--cal', cal.colour);
-$('calcolour').onchange = () => {
-  cal.colour = $('calcolour').value; save();
-  document.documentElement.style.setProperty('--cal', cal.colour);
-  render();
-};
+// a line colour for each step (calibrate, check square, layout); white unless chosen
+cal.colours = cal.colours || {};
+delete cal.colour;
+const colour = step => cal.colours[step] || '#ffffff';
+const step = () => $('mode').value;
+function showColour() {
+  $('linecolour').value = colour(step());
+  document.documentElement.style.setProperty('--cal', colour('cal'));
+}
+$('linecolour').onchange = () => { cal.colours[step()] = $('linecolour').value; save(); showColour(); render(); };
+$('mode').addEventListener('change', showColour);
+showColour();
 if (cal.k === undefined) cal.k = 100 / (cal.measured || 100);  // calibrations saved before units
 cal.units = cal.units || 'cm';
 const round = v => Math.round(v * 100) / 100;
