@@ -122,6 +122,11 @@
       <div class="row"><input type="file" id="photo-file" accept="image/*"><button id="photo-undo">Undo point</button><button id="photo-next" class="primary">Next</button></div>
       <canvas id="photo-canvas"></canvas>
     </div>
+    <div class="row">
+      <label>Packer <select id="packer"><option value="quick">quick (a few seconds)</option>
+        <option value="sparrow">tighter: Sparrow (takes longer)</option></select></label>
+      <label id="sparrow-time-box" class="hidden">Sparrow time (s) <input type="number" id="sparrow-time" value="120" min="10" step="10"></label>
+    </div>
     <p><button id="run" class="primary">Lay out</button>
       <button id="combine-add">Add this pattern to the combined layout</button>
       <span id="run-status" class="muted"></span></p>
@@ -136,6 +141,12 @@
   <section id="result-section" class="hidden">
     <h2>Layout</h2>
     <div class="row"><a id="pdf" href="/api/layout.pdf">Download 1:1 PDF</a></div>
+    <div id="live" class="hidden">
+      <div class="row"><b id="live-text"></b><button id="live-stop">Stop and use the best so far</button></div>
+      <progress id="live-bar" max="1" value="0" style="width:100%"></progress>
+      <p class="muted">Each picture is the best layout Sparrow has found so far, with the fabric length running left to right.</p>
+      <div id="live-view" class="layouts"></div>
+    </div>
     <div id="layouts" class="layouts"></div>
   </section>
 </main>
@@ -281,7 +292,7 @@ function collect() {
   return project;
 }
 
-$('run').onclick = () => lay(() => api('/api/layout', collect()));
+$('run').onclick = () => $('packer').value === 'sparrow' ? runSparrow() : lay(() => api('/api/layout', collect()));
 $('combine-run').onclick = () => lay(() => api('/api/combined/layout', collect().fabric));
 $('combine-add').onclick = async () => showCombined(await api('/api/combined/add', collect()));
 
@@ -297,7 +308,49 @@ function showCombined(entries) {
 async function lay(request) {
   $('run-status').textContent = 'Laying out… many pieces, or aiming for narrowest or most compact, can take a minute.';
   try {
-    const layouts = await request();
+    showLayouts(await request());
+    $('run-status').textContent = '';
+  } catch (e) { $('run-status').textContent = e.message; }
+};
+
+/* ---------- Sparrow: start, watch the best layout so far, show the result ---------- */
+let sparrowJob = null;
+$('packer').onchange = () => $('sparrow-time-box').classList.toggle('hidden', $('packer').value !== 'sparrow');
+$('live-stop').onclick = () => sparrowJob && api('/api/sparrow/stop?job=' + sparrowJob, {});
+async function runSparrow() {
+  const seconds = +$('sparrow-time').value || 120;
+  $('run-status').textContent = '';
+  try {
+    sparrowJob = (await api(`/api/sparrow/start?seconds=${seconds}`, collect())).job;
+  } catch (e) { $('run-status').textContent = e.message; return; }
+  $('result-section').classList.remove('hidden');
+  $('layouts').innerHTML = '';
+  $('live').classList.remove('hidden');
+  $('live-view').innerHTML = '';
+  $('live-text').textContent = 'Sparrow is starting…';
+  $('result-section').scrollIntoView({behavior: 'smooth'});
+  const job = sparrowJob;
+  while (job === sparrowJob) {
+    await new Promise(r => setTimeout(r, 1000));
+    let status;
+    try { status = await api('/api/sparrow/status?job=' + job); }
+    catch (e) { $('live-text').textContent = e.message; return; }
+    const p = status.progress, elapsed = Math.max(...p.map(x => x.elapsed)), total = p[0].seconds;
+    const mins = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    $('live-bar').value = Math.min(elapsed / total, 1);
+    $('live-text').textContent = `Sparrow is packing: ${mins(elapsed)} of ${mins(total)}. Best so far: ` +
+      p.map(x => x.length ? `${x.fabric} ${x.length.toFixed(0)} mm` : `${x.fabric} …`).join(', ');
+    $('live-view').innerHTML = p.filter(x => x.svg).map(x => x.svg.replace('<svg ', '<svg style="width:100%;height:auto;max-height:45vh" ')).join('');
+    if (status.done) {
+      $('live').classList.add('hidden');
+      showLayouts(status.layouts);
+      sparrowJob = null;
+      return;
+    }
+  }
+}
+
+function showLayouts(layouts) {
     $('result-section').classList.remove('hidden');
     $('layouts').innerHTML = layouts.map((l, i) => `
       <h3>${l.fabric}</h3>
@@ -308,9 +361,7 @@ async function lay(request) {
         <a href="/projector?i=${i}" target="_blank">Project this layout</a></div>
       ${l.notes.map(n => `<p class="muted">${n}</p>`).join('')}
       ${l.svg.replace(/ width="[^"]*mm" height="[^"]*mm"/, '')}`).join('');
-    $('run-status').textContent = '';
-  } catch (e) { $('run-status').textContent = e.message; }
-};
+}
 
 function showRects() {
   const list = project.rectangles || [];

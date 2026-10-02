@@ -4,6 +4,7 @@ Run with `pixi run app`, then open http://localhost:8000.
 """
 
 import re
+import time
 from pathlib import Path
 
 import pymupdf
@@ -13,6 +14,7 @@ from fastapi.responses import FileResponse, Response
 from shapely import affinity
 
 from . import project as proj
+from . import sparrow
 from .layout import _align, make_layouts
 from .nest import Stripes
 from .output import layout_svg, write_pdf
@@ -153,6 +155,11 @@ def _laid_out(pieces, settings):
         layouts = make_layouts(pieces, settings)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return _shown(layouts, settings)
+
+
+def _shown(layouts, settings):
+    """Layouts as the page shows them; also kept for the PDF download and the projector."""
     stripes = Stripes(settings.stripe_repeat, settings.stripe_phase) if settings.stripe_repeat else None
     last.update(layouts=layouts, stripes=stripes)
     return [{
@@ -160,6 +167,54 @@ def _laid_out(pieces, settings):
         "fold_width": l.fold_width, "utilisation": l.utilisation, "compactness": l.compactness, "notes": l.notes,
         "flat_width": l.flat_width,
     } for l in layouts]
+
+
+runs = {}  # Sparrow runs in progress, by job number
+
+
+@app.post("/api/sparrow/start")
+def sparrow_start(project: dict, seconds: int = 120):
+    """Start Sparrow on the pattern's pieces; follow it with /api/sparrow/status."""
+    if not sparrow.available():
+        raise HTTPException(400, "Sparrow is not built yet. Run `pixi run sparrow-build` once, then restart the app.")
+    proj.save(project)
+    settings = proj.fabric_settings(project)
+    try:
+        job = sparrow.start(proj.pieces(_abs(project)), settings, seconds)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    number = len(runs) + 1
+    runs[number] = (job, settings)
+    return {"job": number, "seconds": seconds}
+
+
+@app.get("/api/sparrow/status")
+def sparrow_status(job: int):
+    """Progress of a Sparrow run: the best layout so far for each fabric, and the finished layouts once done."""
+    if job not in runs:
+        raise HTTPException(404, "no such run")
+    jobs, settings = runs[job]
+    progress = []
+    for run in jobs:
+        best = run.latest()
+        progress.append({"fabric": run.fabric, "length": best[0] if best else None, "svg": best[1] if best else None,
+                         "elapsed": time.time() - run.started, "seconds": run.seconds})
+    finished = all(run.done() for run in jobs)
+    out = {"progress": progress, "done": finished}
+    if finished:
+        try:
+            out["layouts"] = _shown([run.layout() for run in jobs], settings)
+        except (OSError, KeyError, ValueError) as e:
+            raise HTTPException(500, f"Sparrow stopped without a layout ({e}).")
+    return out
+
+
+@app.post("/api/sparrow/stop")
+def sparrow_stop(job: int):
+    """Finish a run early with the best layout found so far."""
+    for run in runs.get(job, ([], None))[0]:
+        run.stop()
+    return {"stopping": True}
 
 
 @app.post("/api/overlay")

@@ -21,6 +21,14 @@ Then open http://localhost:8000.
 
 Choices are saved per pattern and size in `projects/`.
 
+## Tighter layouts with Sparrow
+
+[Sparrow](https://github.com/JeroenGar/sparrow) is a state-of-the-art nesting engine written in Rust. Build it once:
+
+    pixi run sparrow-build
+
+Then choose *Packer: tighter: Sparrow* in the app's fabric settings. It runs for the time you set (two minutes by default) and shows the best layout found so far while it works; *Stop and use the best so far* finishes early. On the Wattlebird jumpsuit (size 10, 1450 mm fabric) it needs 1854 mm of fabric against 2332 mm from the quick packer. Sparrow handles rectangular fabric only: cut-on-fold pieces are unfolded, and stripe matching and leftover fabric from a photo use the quick packer.
+
 ## Fabric needed, on a phone
 
     pixi run widths

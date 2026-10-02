@@ -60,6 +60,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.12-9_cp312.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/rich-15.0.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/rich-toolkit-0.20.5-pyh5ded981_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-darwin-1.98.1-hf6ec828_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/shellingham-1.5.4-pyhd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/sniffio-1.3.1-pyhd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/starlette-1.7.0-pyh5ded981_0.conda
@@ -186,6 +187,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.12.14-hd05a0c4_3_cpython.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyyaml-6.0.3-py312h04c11ed_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h8b90a29_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/rust-1.98.1-h4ff7c5d_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/scipy-1.18.1-py312h84b0c4e_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/sdl2-2.32.56-h784d473_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/sdl3-3.4.16-h4bb5895_0.conda
@@ -814,6 +816,18 @@ packages:
   run_exports: {}
   size: 37486
   timestamp: 1788918484806
+- conda: https://conda.anaconda.org/conda-forge/noarch/rust-std-aarch64-apple-darwin-1.98.1-hf6ec828_2.conda
+  sha256: c88fbaa6dd94dab30d2e7814d369d05f653e5232f04473d65fa2bcdc31207ec4
+  md5: 77402d6883efe412b63aa5089c11ae91
+  depends:
+  - __unix
+  constrains:
+  - rust >=1.98.1,<1.98.2.0a0
+  license: MIT
+  license_family: MIT
+  run_exports: {}
+  size: 35527854
+  timestamp: 1788886991045
 - conda: https://conda.anaconda.org/conda-forge/noarch/shellingham-1.5.4-pyhd8ed1ab_2.conda
   sha256: 1d6534df8e7924d9087bd388fbac5bd868c5bf8971c36885f9f016da0657d22b
   md5: 83ea3a2ddb7a75c1b09cea582aa4f106
@@ -2671,6 +2685,16 @@ packages:
     - readline >=8.3,<9.0a0
   size: 314395
   timestamp: 1787033878899
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/rust-1.98.1-h4ff7c5d_2.conda
+  sha256: ceac23ee119e64ff51f64b743eebabe1ca99c8795e924abaebfba2ccac478d02
+  md5: 0ba7e1825eb22abab436c6353f6932c2
+  depends:
+  - rust-std-aarch64-apple-darwin 1.98.1 hf6ec828_2
+  license: MIT
+  license_family: MIT
+  run_exports: {}
+  size: 105729132
+  timestamp: 1788887063099
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/scipy-1.18.1-py312h84b0c4e_1.conda
   sha256: 3a40761976b19a856deb1e0d37a4d4cfda080748176f7a313bcf5e1a39fda5d7
   md5: cbcd61fabd3c090177365abb4cfd2f79

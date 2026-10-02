@@ -10,6 +10,8 @@ layout = "python -m sewing_optimiser.cli"
 test = "python -m pytest"
 app = "python -m sewing_optimiser.server"
 widths = "python -m sewing_optimiser.widths"
+# Sparrow, the tighter nesting engine (https://github.com/JeroenGar/sparrow), built from a pinned commit
+sparrow-build = "test -d vendor/sparrow || git clone https://github.com/JeroenGar/sparrow.git vendor/sparrow; git -C vendor/sparrow checkout -q 5901a79 && cargo build --release --manifest-path vendor/sparrow/Cargo.toml"
 demo = "python demo/make_sample_pattern.py && python -m demo.record_demo"
 
 [dependencies]
@@ -25,3 +27,4 @@ uvicorn = ">=0.53.0,<0.54"
 httpx = ">=0.28.1,<0.29"
 ffmpeg = ">=9.0.2,<10"
 playwright-python = ">=1.62.0,<2"
+rust = ">=1.90"
