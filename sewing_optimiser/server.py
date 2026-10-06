@@ -172,6 +172,11 @@ def _shown(layouts, settings):
 runs = {}  # Sparrow runs in progress, by job number
 
 
+@app.get("/api/sparrow/available")
+def sparrow_available():
+    return sparrow.available()
+
+
 @app.post("/api/sparrow/start")
 def sparrow_start(project: dict, seconds: int = 120):
     """Start Sparrow on the pattern's pieces; follow it with /api/sparrow/status."""

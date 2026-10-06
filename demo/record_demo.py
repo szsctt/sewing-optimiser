@@ -68,6 +68,7 @@ def run(page):
     caption(page, "Enter the fabric width and what to aim for, then lay out")
     page.locator("#fabric-section").scroll_into_view_if_needed()
     page.fill("#width", "1100")
+    page.select_option("#packer", "quick")
     page.select_option("#aim", "length")
     page.wait_for_timeout(800)
     page.click("#run")

@@ -123,9 +123,9 @@
       <canvas id="photo-canvas"></canvas>
     </div>
     <div class="row">
-      <label>Packer <select id="packer"><option value="quick">quick (a few seconds)</option>
-        <option value="sparrow">tighter: Sparrow (takes longer)</option></select></label>
-      <label id="sparrow-time-box" class="hidden">Sparrow time (s) <input type="number" id="sparrow-time" value="120" min="10" step="10"></label>
+      <label>Packer <select id="packer"><option value="sparrow">tightest: Sparrow (watch it improve)</option>
+        <option value="quick">faster but loosely packed</option></select></label>
+      <label id="sparrow-time-box">Sparrow time (s) <input type="number" id="sparrow-time" value="120" min="10" step="10"></label>
     </div>
     <p><button id="run" class="primary">Lay out</button>
       <button id="combine-add">Add this pattern to the combined layout</button>
@@ -292,7 +292,13 @@ function collect() {
   return project;
 }
 
-$('run').onclick = () => $('packer').value === 'sparrow' ? runSparrow() : lay(() => api('/api/layout', collect()));
+$('run').onclick = () => {
+  // Sparrow lays out on a plain rectangle; stripes and fabric from a photo need the faster packer
+  const special = fabricShape || $('stripe').value;
+  if ($('packer').value === 'sparrow' && !special) return runSparrow();
+  lay(() => api('/api/layout', collect()), $('packer').value === 'sparrow' ?
+    'Used the faster packer: Sparrow cannot match stripes or use fabric from a photo.' : '');
+};
 $('combine-run').onclick = () => lay(() => api('/api/combined/layout', collect().fabric));
 $('combine-add').onclick = async () => showCombined(await api('/api/combined/add', collect()));
 
@@ -305,17 +311,27 @@ function showCombined(entries) {
     showCombined(await api('/api/combined/remove?i=' + b.dataset.c, {})));
 }
 
-async function lay(request) {
+async function lay(request, note = '') {
   $('run-status').textContent = 'Laying out… many pieces, or aiming for narrowest or most compact, can take a minute.';
   try {
     showLayouts(await request());
-    $('run-status').textContent = '';
+    $('run-status').textContent = note;
   } catch (e) { $('run-status').textContent = e.message; }
 };
 
 /* ---------- Sparrow: start, watch the best layout so far, show the result ---------- */
 let sparrowJob = null;
-$('packer').onchange = () => $('sparrow-time-box').classList.toggle('hidden', $('packer').value !== 'sparrow');
+$('packer').onchange = () => {
+  $('sparrow-time-box').classList.toggle('hidden', $('packer').value !== 'sparrow');
+  try { localStorage.setItem('packer', $('packer').value); } catch (e) {}
+};
+api('/api/sparrow/available').then(ok => {  // Sparrow is the default once it is built
+  let saved = null;
+  try { saved = localStorage.getItem('packer'); } catch (e) {}
+  if (!ok) { $('packer').options[0].disabled = true; $('packer').options[0].textContent += ' (run pixi run sparrow-build)'; }
+  $('packer').value = ok ? (saved || 'sparrow') : 'quick';
+  $('packer').onchange();
+});
 $('live-stop').onclick = () => sparrowJob && api('/api/sparrow/stop?job=' + sparrowJob, {});
 async function runSparrow() {
   const seconds = +$('sparrow-time').value || 120;
