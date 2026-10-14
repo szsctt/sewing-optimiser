@@ -27,3 +27,12 @@ def test_fold_label_on_the_edge_beats_cut_count_inside():
     collar = next(p for p in extract_pieces(JENSEN, "M") if p.name.startswith("collar"))
     (ax, ay), (bx, by) = collar.fold_edge
     assert abs(ay - by) < 1 and ay == pytest.approx(collar.half.bounds[1], abs=1)
+
+
+@pytest.mark.skipif(not JENSEN.exists(), reason="example patterns are not in the repository")
+def test_jensen_back_and_marks():
+    """The back's outline has gaps where three paths nearly meet; buttons and the pocket corner are marks."""
+    pieces = {p.name: p for p in extract_pieces(JENSEN, "M")}
+    back = pieces["Back"]
+    assert back.unfolded and back.half.bounds[3] - back.half.bounds[1] > 250
+    assert len(pieces["Front"].marks.geoms) > 20

@@ -1,6 +1,7 @@
 """Read pattern pieces for one size from a single-page pattern PDF."""
 
 import copy
+import dataclasses
 import functools
 import math
 import os
@@ -18,6 +19,9 @@ LABEL_MAX_DIST_MM = 50  # text further than this from every piece is not a piece
 FOLD_TEXT_DIST = 10  # mm; a fold label must be inside the piece or this close to it
 MIN_PIECE_AREA = 500  # mm²; smaller closed shapes are markings or size labels
 MIN_FOLD_EDGE = 30  # mm; shortest straight edge accepted as a fold edge
+WHOLE_FOLD_DIST = 40  # mm; a lone 'FOLD' label further than this inside a piece marks a fold line through it
+FOLD_SPAN = 0.3  # a fold edge is at least this fraction of the piece's length along it
+SHARED_LAYER = re.compile(r"text|title|base|info|annotation|marker", re.I)  # layers drawn for every size
 JOIN_GAP = 1  # mm; faces closer than twice this are halves of one piece
 NOTCH_MAX = 15  # mm; short strokes touching an outline are notches
 NOTCH_TICK = 6  # mm; length of the tick drawn for a notch
@@ -29,6 +33,7 @@ NOT_NAME = (r"^cut\b|grain|fold|seam\s+allowance|pattern|notch|prepared|copyrigh
             r"^(P|PM|NB|\d+-\d+[mt]?|\d+T)$|included in all|allowance|^1/4|\bseam\b|in all pieces|^\S$|shorten|lengthen")
 NAMED_CUT = re.compile(r"^(.+?)\s*[-–—:]\s*cut\b", re.I)  # 'Right Front - cut 1
 ON_FOLD = re.compile(r"on\s+(the\s+)?fold", re.I)
+FOLD_ONLY = re.compile(r"(place\s+on\s+)?(the\s+)?fold(\s+line)?", re.I)
 
 
 def per_file(fn):
@@ -113,7 +118,7 @@ def list_sizes(path):
     A line style is named after the legend entry above a short horizontal sample of it.
     """
     doc = pymupdf.open(path)
-    layers = list_layers(path)
+    layers = list(dict.fromkeys(list_layers(path)))  # each page can carry its own copy of a layer
     if layers:
         return [(name, name) for name in layers]
     names, sized = {}, set()
@@ -453,7 +458,8 @@ def _regions(lines, gap=GAP_CLOSE):
 
     A line end that touches nothing is joined to the nearest other loose end
     within END_GAP (lines drawn as separate dashes), or else to the nearest
-    line within `gap`.
+    line within `gap`. Loose ends closer than END_GAP / 2 are also joined,
+    where three paths nearly meet at a corner.
     """
     from shapely import STRtree
     from shapely.ops import nearest_points
@@ -471,6 +477,7 @@ def _regions(lines, gap=GAP_CLOSE):
     for k, (i, end) in enumerate(loose):
         partners = [(end.distance(loose[m][1]), m) for m in ends.query(end.buffer(END_GAP))
                     if loose[m][0] != i and m != k]
+        bridges += [LineString([end, loose[m][1]]) for d, m in partners if d < END_GAP / 2 and m > k]
         if partners and min(partners)[0] < END_GAP:
             m = min(partners)[1]
             if (m, k) not in used:
@@ -550,6 +557,8 @@ def _unfold(outline, marks, fold_texts, grain_deg):
     along the grainline, or failing that, along a fold label on the edge, or
     failing that, vertical on the page, or along any fold label. Text in the
     middle of the piece, such as "cut 1 on fold", often runs across the fold.
+    A fold edge spans at least FOLD_SPAN of the piece: a short straight stretch
+    of a curved side is not one (a piece drawn whole is left as it is).
     """
     coords = list(outline.simplify(0.1).exterior.coords)
     on_edge = [(c, d) for c, d in fold_texts if outline.exterior.distance(c) <= FOLD_TEXT_DIST]
@@ -559,7 +568,9 @@ def _unfold(outline, marks, fold_texts, grain_deg):
         best = None
         for a, b in zip(coords, coords[1:]):
             edge = LineString([a, b])
-            if edge.length < MIN_FOLD_EDGE:
+            ux, uy = (b[0] - a[0]) / (edge.length or 1), (b[1] - a[1]) / (edge.length or 1)
+            along = [x * ux + y * uy for x, y in coords]
+            if edge.length < max(MIN_FOLD_EDGE, FOLD_SPAN * (max(along) - min(along))):
                 continue
             angle = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
             if not any(abs((angle - d + 90) % 180 - 90) < 3 for d in directions):
@@ -667,7 +678,7 @@ def pieces_from_outlines(texts, outlines, marks=None):
     pieces = []
     for outline, notches, texts, name_parts, g, fold_texts in zip(outlines, marks, labels, names, grain, folds):
         joined = " ".join(texts)
-        cut = re.search(r"cut\s*(\d+|one|two|three|four)(\s*pairs?)?", joined, re.I)
+        cut = re.search(r"cut\s*(\d+|one|two|three|four)\b(?!\s*(?:mm|cm|in)\b)(\s*pairs?)?", joined, re.I)  # not 'cut 3mm into
         near = [t for t in texts if not re.search(r"^cut\b|grain|fold|square|prepared|copyright", t, re.I)]
         named = [m.group(1) for t in texts if (m := NAMED_CUT.match(t)) and not re.search(NOT_NAME, m.group(1), re.I)]
         named += [before for before, t in zip(texts, texts[1:])  # a name on the line above 'Cut 1 Pair Self'
@@ -680,7 +691,10 @@ def pieces_from_outlines(texts, outlines, marks=None):
         if g is None and re.search(r"\bbias\b", joined, re.I):
             g = _long_axis(outline) + 45  # cut on the bias: grain at 45° to the piece's length
         on_fold = any(ON_FOLD.search(t) for _, _, t in fold_texts)
-        unfolded = _unfold(outline, notches, [(c, d) for c, d, _ in fold_texts], g) if on_fold else None
+        # a 'FOLD' label well inside the piece marks the fold line of a piece drawn whole
+        whole = any(FOLD_ONLY.fullmatch(t.strip()) and outline.exterior.distance(c) > WHOLE_FOLD_DIST
+                    for c, _, t in fold_texts)
+        unfolded = _unfold(outline, notches, [(c, d) for c, d, _ in fold_texts], g) if on_fold and not whole else None
         fabric = "interfacing" if re.search(r"interfacing", name, re.I) else "main"
         if unfolded:
             full, both, edge = unfolded
@@ -705,6 +719,9 @@ def extract_pieces(path, size_layer=None):
         boxes = _shaded_boxes(doc, sheet)
         dashed = _dashed_lines(doc, sheet)
         every_line = None
+        layers = list_layers(path)
+        shared = [] if not layers or size_layer is None or ":" in size_layer else \
+            sheet_lines(doc, sheet, "|".join({n for n in layers if SHARED_LAYER.search(n)}))[0]
         for piece in pieces_from_outlines(texts, outlines, _notches(lines, outlines)):
             if _check_square(piece) or any(b.contains(piece.outline) for b in boxes):
                 continue
@@ -715,9 +732,36 @@ def extract_pieces(path, size_layer=None):
                     every_line = sheet_lines(doc, sheet, None)[0]
                 piece.grain_deg = _grain_from_arrow(piece.half if piece.half is not None else piece.outline, every_line)
             piece.page = number
+            if shared:
+                piece = _with_inner_marks(piece, lines, shared)
             _option_regions(piece, parts, texts)
             pieces.append(piece)
     return _drop_common_title(_drop_unmarked(pieces))
+
+
+def _with_inner_marks(piece, size_lines, shared_lines):
+    """Add placement marks inside a piece: the size's own lines clear of its edge (buttons,
+    pocket corners) and straight lines drawn for every size that cross at least FOLD_SPAN of the
+    piece (fold lines, grainlines; not the small garment drawings)."""
+    shape = piece.half if piece.half is not None else piece.outline
+    inside = shape.buffer(-1.5)
+    found = [l for l in size_lines if inside.contains(l)]
+    for line in shared_lines:
+        if len(line.coords) == 2 and line.length >= MIN_FOLD_EDGE:
+            part = line.intersection(shape)
+            (ax, ay), (bx, by) = line.coords
+            ux, uy = (bx - ax) / line.length, (by - ay) / line.length
+            along = [x * ux + y * uy for x, y in shape.exterior.coords]
+            span = max(MIN_FOLD_EDGE, FOLD_SPAN * (max(along) - min(along)))
+            found += [g for g in getattr(part, "geoms", [part]) if g.geom_type == "LineString" and g.length >= span]
+    if not found:
+        return piece
+    own = piece.half_marks if piece.half is not None else piece.marks
+    marks = MultiLineString(list(own.geoms) + found)
+    if piece.half is None:
+        return dataclasses.replace(piece, marks=marks)
+    both = MultiLineString(list(marks.geoms) + list(_reflect(marks, *piece.fold_edge).geoms))
+    return dataclasses.replace(piece, marks=both, half_marks=marks)
 
 
 def _option_regions(piece, parts, texts):
