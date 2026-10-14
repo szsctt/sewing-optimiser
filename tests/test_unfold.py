@@ -16,3 +16,14 @@ def test_unfolded_halves_match_projector_pieces():
             assert piece.unfolded
             ref = whole["FRONT" if "FRONT" in piece.name else "BACK"].outline
             assert piece.outline.area == pytest.approx(ref.area, rel=0.01)
+
+
+JENSEN = Path(__file__).parent.parent / "examples/Jensen Shirt sewing pattern/WBM Jensen Shirt pattern A0_2 pages.pdf"
+
+
+@pytest.mark.skipif(not JENSEN.exists(), reason="example patterns are not in the repository")
+def test_fold_label_on_the_edge_beats_cut_count_inside():
+    """The collar's 'Fold' label is on its short top edge; 'cut 2 ... on the fold' runs down its middle."""
+    collar = next(p for p in extract_pieces(JENSEN, "M") if p.name.startswith("collar"))
+    (ax, ay), (bx, by) = collar.fold_edge
+    assert abs(ay - by) < 1 and ay == pytest.approx(collar.half.bounds[1], abs=1)

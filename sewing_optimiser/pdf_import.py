@@ -547,12 +547,15 @@ def _unfold(outline, marks, fold_texts, grain_deg):
     """Mirror a half piece across its fold edge.
 
     The fold edge is the long straight edge closest to a fold label that runs
-    along the grainline (vertical on the page when no grainline is marked),
-    or failing that, along a fold label.
+    along the grainline, or failing that, along a fold label on the edge, or
+    failing that, vertical on the page, or along any fold label. Text in the
+    middle of the piece, such as "cut 1 on fold", often runs across the fold.
     """
     coords = list(outline.simplify(0.1).exterior.coords)
-    grain = grain_deg if grain_deg is not None else 90.0
-    for directions in ([grain], [d for _, d in fold_texts]):
+    on_edge = [(c, d) for c, d in fold_texts if outline.exterior.distance(c) <= FOLD_TEXT_DIST]
+    fold_texts = on_edge or fold_texts
+    passes = ([grain_deg] if grain_deg is not None else [], [d for _, d in on_edge], [90.0], [d for _, d in fold_texts])
+    for directions in passes:
         best = None
         for a, b in zip(coords, coords[1:]):
             edge = LineString([a, b])
