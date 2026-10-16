@@ -27,7 +27,7 @@ Choices are saved per pattern and size in `projects/`.
 
     pixi run sparrow-build
 
-Sparrow is then the app's default packer (*Packer* in the fabric settings; *faster but loosely packed* is the built-in packer). It runs for the time you set (two minutes by default) and shows the best layout found so far while it works; *Stop and use the best so far* finishes early. On the Wattlebird jumpsuit (size 10, 1450 mm fabric) it needs 1854 mm of fabric against 2332 mm from the quick packer. Sparrow handles rectangular fabric only: cut-on-fold pieces are unfolded, and stripe matching and leftover fabric from a photo use the faster packer.
+Sparrow is then the app's default packer (*Packer* in the fabric settings; *faster but loosely packed* is the built-in packer). It runs for the time you set (two minutes by default) and shows the best layout found so far while it works; *Stop and use the best so far* finishes early. On the Wattlebird jumpsuit (size 10, 1450 mm fabric) it needs 1854 mm of fabric against 2332 mm from the quick packer. The packer choice also applies to *Lay out all together*. Sparrow handles rectangular fabric only: cut-on-fold pieces are unfolded, and stripe matching and leftover fabric from a photo use the faster packer.
 
 ## Fabric needed, on a phone
 

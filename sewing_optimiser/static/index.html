@@ -304,14 +304,15 @@ function collect() {
   return project;
 }
 
-$('run').onclick = () => {
-  // Sparrow lays out on a plain rectangle; stripes and fabric from a photo need the faster packer
+// Sparrow lays out on a plain rectangle; stripes and fabric from a photo need the faster packer
+function pack(sparrowUrl, quickUrl, body) {
   const special = fabricShape || $('stripe').value;
-  if ($('packer').value === 'sparrow' && !special) return runSparrow();
-  lay(() => api('/api/layout', collect()), $('packer').value === 'sparrow' ?
+  if ($('packer').value === 'sparrow' && !special) return runSparrow(sparrowUrl, body);
+  lay(() => api(quickUrl, body), $('packer').value === 'sparrow' ?
     'Used the faster packer: Sparrow cannot match stripes or use fabric from a photo.' : '');
-};
-$('combine-run').onclick = () => lay(() => api('/api/combined/layout', collect().fabric));
+}
+$('run').onclick = () => pack('/api/sparrow/start', '/api/layout', collect());
+$('combine-run').onclick = () => pack('/api/combined/sparrow/start', '/api/combined/layout', collect().fabric);
 $('combine-add').onclick = async () => showCombined(await api('/api/combined/add', collect()));
 
 function showCombined(entries) {
@@ -345,11 +346,11 @@ api('/api/sparrow/available').then(ok => {  // Sparrow is the default once it is
   $('packer').onchange();
 });
 $('live-stop').onclick = () => sparrowJob && api('/api/sparrow/stop?job=' + sparrowJob, {});
-async function runSparrow() {
+async function runSparrow(url, body) {
   const seconds = +$('sparrow-time').value || 120;
   $('run-status').textContent = '';
   try {
-    sparrowJob = (await api(`/api/sparrow/start?seconds=${seconds}`, collect())).job;
+    sparrowJob = (await api(`${url}?seconds=${seconds}`, body)).job;
   } catch (e) { $('run-status').textContent = e.message; return; }
   $('result-section').classList.remove('hidden');
   $('layouts').innerHTML = '';

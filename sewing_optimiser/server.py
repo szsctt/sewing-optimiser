@@ -190,9 +190,20 @@ def sparrow_start(project: dict, seconds: int = 120):
     if not sparrow.available():
         raise HTTPException(400, "Sparrow is not built yet. Run `pixi run sparrow-build` once, then restart the app.")
     proj.save(project)
-    settings = proj.fabric_settings(project)
+    return _sparrow(proj.pieces(_abs(project)), proj.fabric_settings(project), seconds)
+
+
+@app.post("/api/combined/sparrow/start")
+def combined_sparrow_start(fabric: dict, seconds: int = 120):
+    """Start Sparrow on all combined patterns' pieces; follow it with /api/sparrow/status."""
+    if not sparrow.available():
+        raise HTTPException(400, "Sparrow is not built yet. Run `pixi run sparrow-build` once, then restart the app.")
+    return _sparrow(proj.combined_pieces(ROOT), proj.fabric_settings({"fabric": fabric}), seconds)
+
+
+def _sparrow(pieces, settings, seconds):
     try:
-        job = sparrow.start(proj.pieces(_abs(project)), settings, seconds)
+        job = sparrow.start(pieces, settings, seconds)
     except ValueError as e:
         raise HTTPException(400, str(e))
     number = len(runs) + 1
