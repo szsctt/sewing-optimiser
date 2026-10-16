@@ -36,3 +36,21 @@ def test_jensen_back_and_marks():
     back = pieces["Back"]
     assert back.unfolded and back.half.bounds[3] - back.half.bounds[1] > 250
     assert len(pieces["Front"].marks.geoms) > 20
+
+
+@pytest.mark.skipif(not JENSEN.exists(), reason="example patterns are not in the repository")
+def test_chosen_fold_edge():
+    """A fold edge chosen in the app replaces the guess; false leaves the piece as drawn."""
+    from sewing_optimiser import project as proj
+    from sewing_optimiser.edit import _edges
+    p = proj.default(JENSEN, "M")
+    guessed = proj.pieces(p)
+    k = next(i for i, x in enumerate(guessed) if x.name.startswith("collar"))
+    side = max(_edges(guessed[k].half), key=lambda e: abs(e[1][1] - e[0][1]))  # a long side, not the top
+    p["pieces"] = [{} for _ in guessed]
+    p["pieces"][k] = {"fold": [list(side[0]), list(side[1])]}
+    chosen = proj.pieces(p)[k]
+    assert chosen.fold_edge == side and chosen.outline.area == pytest.approx(guessed[k].outline.area, rel=0.05)
+    p["pieces"][k] = {"fold": False}
+    drawn = proj.pieces(p)[k]
+    assert drawn.half is None and drawn.outline.equals(guessed[k].half)

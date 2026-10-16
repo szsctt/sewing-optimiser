@@ -39,6 +39,8 @@
   #pick path:hover { fill: rgba(10,108,255,0.25); }
   #pick path.sel { fill: rgba(10,108,255,0.45); }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  svg .edge { stroke: transparent; cursor: pointer; }
+  svg .edge:hover { stroke: rgba(0,153,0,0.4); }
 </style>
 </head>
 <body>
@@ -91,9 +93,10 @@
     <div class="row">Clicking the piece sets:
       <label><input type="radio" name="ed-mode" value="trim" checked> cutting options</label>
       <label><input type="radio" name="ed-mode" value="match_y"> stripe match line (red)</label>
-      <label><input type="radio" name="ed-mode" value="lengthen_at"> lengthen/shorten line (blue)</label></div>
+      <label><input type="radio" name="ed-mode" value="lengthen_at"> lengthen/shorten line (blue)</label>
+      <label><input type="radio" name="ed-mode" value="fold"> fold edge (green)</label></div>
     <div class="body"><div id="ed-view"></div>
-      <div class="side"><div id="ed-parts"></div><p id="ed-lines" class="muted"></p>
+      <div class="side"><div id="ed-parts"></div><p id="ed-lines" class="muted"></p><p id="ed-fold" class="muted"></p>
         <p class="muted">Set how much to lengthen in the table's "Lengthen by" column.</p></div></div>
   </dialog>
 
@@ -215,16 +218,21 @@ async function loadPieces() {
   renderPieces();
 }
 
-/* A piece's picture: outline, grainline, match (red) and lengthen (blue) lines, option parts (dashed; red when left off). */
-function pieceSvg(p, i, px, cls) {
+/* A piece's picture: outline, grainline, fold edge (green), match (red) and lengthen (blue) lines,
+   option parts (dashed; red when left off); edges to click when choosing the fold. */
+function pieceSvg(p, i, px, cls, edges = false) {
   const s = (px - 10) / Math.max(p.w, p.h);
   const line = (y, colour) => y == null ? '' : `<line x1="0" x2="${p.w}" y1="${y}" y2="${y}" stroke="${colour}" stroke-width="${1.5 / s}"/>`;
   const parts = (p.parts || []).map((part, k) => `<path data-part="${k}" d="${part.d}" stroke="#06f" stroke-dasharray="${4 / s} ${3 / s}"
     stroke-width="${1.2 / s}" fill="${p.trim.includes(k) ? 'rgba(200,0,0,0.3)' : 'transparent'}"><title>${part.label || 'part ' + (k + 1)}</title></path>`).join('');
   return `<svg class="${cls}" data-i="${i}" viewBox="${-5 / s} ${-5 / s} ${px / s} ${px / s}">
-    <path d="${p.d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>
+    ${edges ? `<path d="${p.d}" fill="none" stroke="#bbb" stroke-dasharray="${4 / s} ${3 / s}" stroke-width="${1 / s}"/>
+      <path d="${p.drawn_d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>`
+      : `<path d="${p.d}" fill="#eef" stroke="#333" stroke-width="${1 / s}"/>`}
     <line x1="${p.w / 2}" x2="${p.w / 2}" y1="${p.h * 0.2}" y2="${p.h * 0.8}" stroke="#999" stroke-width="${1 / s}"/>
-    ${line(p.match_y, '#e33')}${line(p.lengthen_at, '#06f')}${parts}</svg>`;
+    ${p.fold_d ? `<path d="${p.fold_d}" stroke="#090" stroke-width="${3 / s}" fill="none"/>` : ''}
+    ${line(p.match_y, '#e33')}${line(p.lengthen_at, '#06f')}${parts}
+    ${edges ? p.edges.map((e, k) => `<path class="edge" data-edge="${k}" d="${e.d}" stroke-width="${12 / s}" fill="none"><title>fold here</title></path>`).join('') : ''}</svg>`;
 }
 
 function renderPieces() {
@@ -241,7 +249,7 @@ function renderPieces() {
           <option value="90">page vertical</option><option value="0">page horizontal</option></select></td>
       <td><input type="checkbox" data-i="${i}" data-k="cross_grain" ${p.cross_grain ? 'checked' : ''}></td>
       <td><input type="checkbox" data-i="${i}" data-k="mirror" ${p.mirror ? 'checked' : ''}></td>
-      <td>${p.on_fold ? `<select data-i="${i}" data-k="cut_on_fold"><option value="1" ${p.cut_on_fold ? 'selected' : ''}>fold or unfold, whichever is shorter</option><option value="0" ${p.cut_on_fold ? '' : 'selected'}>always unfold</option></select>` : `<button data-fold="${i}" title="Treat the longest straight edge along the grain as the fold">Mark on fold</button>`}</td>
+      <td>${p.on_fold ? `<select data-i="${i}" data-k="cut_on_fold"><option value="1" ${p.cut_on_fold ? 'selected' : ''}>fold or unfold, whichever is shorter</option><option value="0" ${p.cut_on_fold ? '' : 'selected'}>always unfold</option><option value="none">not on the fold</option></select>` : `<button data-fold="${i}" title="Treat the longest straight edge along the grain as the fold; click the picture to choose another edge">Mark on fold</button>`}</td>
       <td>${p.source == null ? '' : `<select data-join="${p.source}"><option value="">—</option>${pieces.filter(q => q.source != null && q !== p).map(q => `<option value="${q.source}">put ${q.name.slice(0, 25)} below</option>`).join('')}</select>`}</td>
       <td><input type="number" data-i="${i}" data-k="match_y" value="${p.match_y ?? ''}" placeholder="none"></td>
       <td><input type="number" data-i="${i}" data-k="lengthen" value="${p.lengthen || ''}" placeholder="0"></td>
@@ -253,6 +261,7 @@ function renderPieces() {
     else if (k === 'copies') p[k] = parseInt(el.value) || 0;
     else if (k === 'match_y' || k === 'lengthen_at') p[k] = el.value === '' ? null : parseFloat(el.value);
     else if (k === 'lengthen') p[k] = parseFloat(el.value) || 0;
+    else if (k === 'cut_on_fold' && el.value === 'none') { setFold(+el.dataset.i, false); return; }
     else if (k === 'cut_on_fold') p[k] = el.value === '1';
     else if (k === 'grain_deg') { p.grain_override = el.value === 'auto' ? null : parseFloat(el.value); }
     else p[k] = el.value;
@@ -283,7 +292,10 @@ function collect() {
                mirror: p.mirror, cut_on_fold: p.cut_on_fold, match_y: p.match_y,
                lengthen: p.lengthen || 0, lengthen_at: p.lengthen_at, trim: p.trim || []};
     if (p.grain_override != null) c.grain_deg = p.grain_override;
-    if (p.on_fold_mark || (project.pieces[i] || {}).on_fold) c.on_fold = true;
+    const before = project.pieces[i] || {};
+    if (p.fold !== undefined) c.fold = p.fold;
+    else if ('fold' in before) c.fold = before.fold;
+    if (c.fold === undefined && (p.on_fold_mark || before.on_fold)) c.on_fold = true;
     return c;
   });
   project.fabric = {width: +$('width').value, gap: +$('gap').value, one_way: $('oneway').checked,
@@ -434,7 +446,13 @@ function openEditor(i) {
   editing = i;
   const p = pieces[i];
   $('ed-title').textContent = p.name;
-  $('ed-view').innerHTML = pieceSvg(p, i, 600, 'big');
+  const foldMode = document.querySelector('input[name="ed-mode"]:checked').value === 'fold';
+  $('ed-view').innerHTML = pieceSvg(p, i, 600, 'big', foldMode);
+  $('ed-fold').innerHTML = (p.on_fold ? 'Cut on the fold along the green edge.' : 'Not cut on the fold.') +
+    (foldMode ? ' The piece is shown as drawn on the pattern; click one of its straight edges to fold there.'
+      : ' Choose "fold edge" above to change it.') +
+    (p.on_fold ? ' <button id="ed-unfold">Not on the fold</button>' : '');
+  if (p.on_fold) $('ed-unfold').onclick = () => setFold(i, false).then(() => openEditor(i));
   $('ed-parts').innerHTML = (p.parts || []).length
     ? '<p><b>Cutting options.</b> Untick a part to leave it off (hover a part to see it).</p>' +
       (p.says.length ? `<p class="muted">The pattern says: ${p.says.join('; ')}</p>` : '') + p.parts.map((part, k) =>
@@ -451,6 +469,10 @@ function openEditor(i) {
   const svg = $('ed-view').querySelector('svg');
   svg.onclick = ev => {
     const mode = document.querySelector('input[name="ed-mode"]:checked').value;
+    if (mode === 'fold') {
+      if (ev.target.dataset.edge !== undefined) setFold(i, p.edges[+ev.target.dataset.edge].at).then(() => openEditor(i));
+      return;
+    }
     if (mode === 'trim') {
       if (ev.target.dataset.part !== undefined) togglePart(+ev.target.dataset.part);
       return;
@@ -462,6 +484,11 @@ function openEditor(i) {
   };
   if (!$('editor').open) $('editor').showModal();
 }
+async function setFold(i, edge) {
+  pieces[i].fold = edge; pieces[i].on_fold_mark = false;
+  collect(); await loadPieces();
+}
+document.querySelectorAll('input[name="ed-mode"]').forEach(r => r.onchange = () => openEditor(editing));
 async function togglePart(k) {
   const p = pieces[editing];
   p.trim = p.trim.includes(k) ? p.trim.filter(x => x !== k) : [...p.trim, k];

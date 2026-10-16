@@ -1,4 +1,4 @@
-"""Changes a person makes to pieces read from a PDF: marking a piece as cut on fold, joining two pieces."""
+"""Changes a person makes to pieces read from a PDF: choosing the fold, joining two pieces."""
 
 import math
 from dataclasses import replace
@@ -39,6 +39,17 @@ def mark_on_fold(piece):
     edge = max(along, key=lambda e: math.dist(*e))
     full, marks = _unfold(piece.outline, piece.marks, edge)
     return replace(piece, outline=full, marks=marks, half=piece.outline, half_marks=piece.marks, fold_edge=edge)
+
+
+def set_fold(piece, edge):
+    """Cut on the fold along edge ((x, y), (x, y)) of the piece as drawn, or as drawn when edge is None."""
+    drawn = piece.half if piece.half is not None else piece.outline
+    marks = piece.half_marks if piece.half is not None else piece.marks
+    if edge is None:
+        return replace(piece, outline=drawn, marks=marks, half=None, half_marks=MultiLineString(), fold_edge=None)
+    edge = (tuple(edge[0]), tuple(edge[1]))
+    full, both = _unfold(drawn, marks, edge)
+    return replace(piece, outline=full, marks=both, half=drawn, half_marks=marks, fold_edge=edge)
 
 
 def join(upper, lower):

@@ -12,9 +12,11 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from shapely import affinity
+from shapely.geometry import LineString
 
 from . import project as proj
 from . import sparrow
+from .edit import _edges
 from .layout import _align, make_layouts
 from .nest import Stripes
 from .output import layout_svg, write_pdf
@@ -139,13 +141,18 @@ def get_pieces(project: dict):
         if parts:
             parts[biggest]["label"] = "main part"
         says = list(dict.fromkeys(t for t in p.region_labels if re.search(r"\bcut\b", t, re.I)))
+        # straight edges of the piece as drawn, any of which can be chosen as the fold
+        line_d = lambda e: "M" + "L".join(f"{x:.1f},{y:.1f}" for x, y in place(LineString(e)).coords)
+        drawn = p.half if p.half is not None else p.outline
+        edges = [{"d": line_d(e), "at": [list(e[0]), list(e[1])]} for e in _edges(drawn)]
         out.append({
             "index": i, "name": p.name, "copies": p.copies, "include": p.include, "fabric": p.fabric,
             "cross_grain": p.cross_grain, "mirror": p.mirror, "cut_on_fold": p.cut_on_fold,
             "match_y": p.match_y, "grain_deg": p.grain_deg, "on_fold": p.half is not None, "page": p.page,
             "lengthen": p.lengthen, "lengthen_at": p.lengthen_at, "source": p.source,
             "d": _path_d(aligned), "w": maxx - minx, "h": maxy - miny, "parts": parts, "says": says,
-            "trim": getattr(p, "trimmed", []),
+            "trim": getattr(p, "trimmed", []), "edges": edges,
+            "fold_d": line_d(p.fold_edge) if p.fold_edge else None, "drawn_d": _path_d(place(drawn)),
         })
     return {"pieces": out, "joins": full["joins"]}
 
