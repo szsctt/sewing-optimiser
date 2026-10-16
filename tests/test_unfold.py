@@ -54,3 +54,9 @@ def test_chosen_fold_edge():
     p["pieces"][k] = {"fold": False}
     drawn = proj.pieces(p)[k]
     assert drawn.half is None and drawn.outline.equals(guessed[k].half)
+
+
+@pytest.mark.skipif(not JENSEN.exists(), reason="example patterns are not in the repository")
+def test_grain_along_fold_when_unlabelled():
+    back = next(p for p in extract_pieces(JENSEN, "M") if p.name == "Back")
+    assert abs((back.grain_deg + 90) % 180 - 90) < 1  # the fold is horizontal on the sheet

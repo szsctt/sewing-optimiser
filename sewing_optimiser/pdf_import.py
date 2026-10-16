@@ -727,7 +727,10 @@ def extract_pieces(path, size_layer=None):
                 continue
             if piece.half is None and not list_layers(path):  # layered patterns draw sizes, not folds, dashed
                 piece = _fold_on_dashed_edge(piece, dashed)
-            if piece.grain_deg is None:  # no 'grainline' label: use the arrow
+            if piece.grain_deg is None and piece.fold_edge is not None:  # no 'grainline' label: a fold runs along the grain
+                (ax, ay), (bx, by) = piece.fold_edge
+                piece.grain_deg = math.degrees(math.atan2(by - ay, bx - ax))
+            if piece.grain_deg is None:  # nor a fold: use the arrow
                 if every_line is None:
                     every_line = sheet_lines(doc, sheet, None)[0]
                 piece.grain_deg = _grain_from_arrow(piece.half if piece.half is not None else piece.outline, every_line)
