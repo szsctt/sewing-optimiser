@@ -60,3 +60,10 @@ def test_chosen_fold_edge():
 def test_grain_along_fold_when_unlabelled():
     back = next(p for p in extract_pieces(JENSEN, "M") if p.name == "Back")
     assert abs((back.grain_deg + 90) % 180 - 90) < 1  # the fold is horizontal on the sheet
+
+
+@pytest.mark.skipif(not JENSEN.exists(), reason="example patterns are not in the repository")
+def test_slit_from_the_edge_is_a_mark():
+    """The sleeve's placket slit runs 12 cm up from the hem."""
+    sleeve = next(p for p in extract_pieces(JENSEN, "L") if p.name == "Sleeve")
+    assert any(110 < m.length < 130 and m.distance(sleeve.outline.exterior) < 1 for m in sleeve.marks.geoms)

@@ -743,12 +743,14 @@ def extract_pieces(path, size_layer=None):
 
 
 def _with_inner_marks(piece, size_lines, shared_lines):
-    """Add placement marks inside a piece: the size's own lines clear of its edge (buttons,
-    pocket corners) and straight lines drawn for every size that cross at least FOLD_SPAN of the
-    piece (fold lines, grainlines; not the small garment drawings)."""
+    """Add placement marks inside a piece: the size's own lines inside it (buttons, pocket corners,
+    and slits or lines running in from the edge, longer than a notch) and straight lines drawn for
+    every size that cross at least FOLD_SPAN of the piece (fold lines, grainlines; not the small
+    garment drawings)."""
     shape = piece.half if piece.half is not None else piece.outline
-    inside = shape.buffer(-1.5)
-    found = [l for l in size_lines if inside.contains(l)]
+    inside, near_edge = shape.buffer(-1.5), shape.exterior.buffer(1.5)
+    found = [l for l in size_lines if inside.contains(l) or
+             (shape.buffer(0.5).contains(l) and l.difference(near_edge).length > NOTCH_MAX)]
     for line in shared_lines:
         if len(line.coords) == 2 and line.length >= MIN_FOLD_EDGE:
             part = line.intersection(shape)
