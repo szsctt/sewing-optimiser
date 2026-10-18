@@ -8,6 +8,7 @@ finds, which the app shows as progress.
 """
 
 import json
+import re
 import signal
 import subprocess
 import tempfile
@@ -72,7 +73,10 @@ class Run:
             return None
         shot = max(shots, key=lambda p: (p.stat().st_mtime, p.name))
         try:
-            return float(shot.name.split("_")[1]), shot.read_text()
+            # each fabric's picture gets its own ids: on one page, a shared id would show another fabric's pieces
+            key = re.sub(r"\W", "_", self.fabric)
+            svg = shot.read_text().replace('id="', f'id="{key}-').replace('href="#', f'href="#{key}-')
+            return float(shot.name.split("_")[1]), svg
         except (ValueError, IndexError, OSError):
             return None
 
